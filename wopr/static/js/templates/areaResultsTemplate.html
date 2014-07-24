@@ -1,0 +1,16 @@
+<h3>Shapefiles indicators:</h3>
+
+<table class="table table-striped">
+    <thead>
+        <th>Dataset</th>
+        <th>Proportion</th>
+    </thead>
+    <tbody>
+    <% $.each(resp.objects, function(i, obj){ %>
+        <tr>
+            <td><%= obj.human_name %></td>
+            <td><%= obj.ratio %></td>
+        </tr>
+    <% }) %>
+    </tbody>
+</table>

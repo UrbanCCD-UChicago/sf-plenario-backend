@@ -7,13 +7,16 @@ from geoalchemy2 import Geometry
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship, backref
 from fiona import prop_width, prop_type
-
+from datetime import datetime
 from wopr.database import Base, app_engine as engine, Point
 
 MetaTable = Table('meta_master', Base.metadata,
     autoload=True, autoload_with=engine)
 
 MasterTable = Table('dat_master', Base.metadata,
+    autoload=True, autoload_with=engine)
+
+CensusTable = Table('sf_census_blocks', Base.metadata,
     autoload=True, autoload_with=engine)
 
 def crime_table(name, metadata):
@@ -59,6 +62,21 @@ def sf_crime_table(name, metadata):
     extend_existing=True)
     return table
 
+def sf_meta_table(metadata):
+    table = Table('sf_meta', metadata,
+            Column( 'row_id',       Integer, primary_key=True   ),
+            Column( 'table_name',   String(length=40)           ),
+            Column( 'human_name',   String(length=60)           ),
+            Column( 'description',  String(length=200)          ),
+            Column( 'file_name',    String(length=30)           ),
+            Column( 'last_update',  DateTime, default=datetime.now()     ),
+            Column( 'count_q',      Boolean                     ),
+            Column( 'area_q',       Boolean                     ),
+            Column( 'dist_q',       Boolean                     ),
+            Column( 'temp_q',       Boolean                     ),
+    extend_existing=True)
+    return table
+
 def map_esri_type(esri_type):
     """ Map esri type (extracted through fiona) to SQLAlchemy type """
     tl = esri_type.split(':')
@@ -73,7 +91,8 @@ def map_esri_type(esri_type):
         if not l:              return Float
         else:
             ps = l.split('.')
-            return Numeric(int(ps[0]), int(ps[1]))
+            if len(ps) < 2:    return Float(precision=ps[0])
+            else:              return Numeric(int(ps[0]), int(ps[1]))
             
 def shp2table(name, metadata, schema, force_multipoly=False):
     """ Create a SQLAlchemy table schema from a shapefile schema opbtained through fiona

@@ -89,54 +89,6 @@ def dat_crime(fpath=None):
     cleanup_temp_tables()
     return 'DAT crime created'
 
-def sf_dat_crime(fpath=None, crime_type='violent'):
-    #raw_crime = sf_raw_crime(fpath=fpath)
-    # Assume for now there's no duplicate in the raw data, which means we don't
-    # - dedupe_crime()
-    # - and don't create src_crime()
-    raw_crime_table = Table('raw_sf_crimes_all', Base.metadata,
-        autoload=True, autoload_with=engine, extend_existing=True)
-    if crime_type == 'violent':
-        categories = ['ASSAULT', 'ROBBERY', 'SEX OFFENSES, FORCIBLE']
-    elif crime_type == 'property':
-        categories = ['LARCENY/THEFT', 'VEHICLE THEFT', 'BURGLARY', 'STOLEN PROPERTY',\
-                      'ARSON', 'VANDALISM']
-    # Create table "dat_sf_crimes_all", that contains additional fields needed
-    # by Plenario, in addition to the raw data
-    dat_crime_table = sf_crime_table('dat_sf_crimes_{0}'.format(crime_type), Base.metadata)
-    dat_crime_table.append_column(
-        Column( 'sf_crimes_all_row_id', Integer,    primary_key=True                         ) )
-    dat_crime_table.append_column(
-        Column( 'start_date',           TIMESTAMP,  server_default=text('CURRENT_TIMESTAMP') ) )
-    dat_crime_table.append_column(
-        Column( 'end_date',             TIMESTAMP,  server_default=text('NULL')              ) )
-    dat_crime_table.append_column(
-        Column( 'current_flag',         Boolean,    server_default=text('TRUE')              ) )
-    # Constrain (id, start_date) to be unique (?)
-    # dat_crime_table.append_constraint(UniqueConstraint('id', 'start_date'))
-    dat_crime_table.create(bind=engine, checkfirst=True)
-    new_cols = ['start_date', 'end_date', 'current_flag', 'sf_crimes_all_row_id']
-    # Insert data from raw_crime_table (to be src_crime_table when we'll check
-    # for duplicates)
-    dat_ins = dat_crime_table.insert()\
-        .from_select(
-            [c for c in dat_crime_table.columns.keys() if c not in new_cols],
-            select([c for c in raw_crime_table.columns if c.name != 'dup_row_id'])\
-                .where(raw_crime_table.c.category.in_(categories))
-        )
-    conn = engine.contextual_connect()
-    res = conn.execute(dat_ins)
-    cols = sf_crime_master_cols(dat_crime_table, crime_type=crime_type)
-    master_ins = MasterTable.insert()\
-        .from_select(
-            [c for c in MasterTable.columns.keys() if c != 'master_row_id'],
-            select(cols).select_from(dat_crime_table)
-        )
-    conn = engine.contextual_connect()
-    res = conn.execute(master_ins)
-    return 'DAT crime created'
-
-
 @celery_app.task
 def raw_crime(fpath=None, tablename='raw_chicago_crimes_all'):
     # Step One: Load raw downloaded data
@@ -159,50 +111,6 @@ def raw_crime(fpath=None, tablename='raw_chicago_crimes_all'):
             (FORMAT CSV, HEADER true, DELIMITER ',')" % tablename, f)
     conn.commit()
     return 'Raw Crime data inserted'
-
-def sf_raw_crime(fpath=None, tablename='raw_sf_crimes_all'):
-    if not fpath:
-        fpath = download_crime()
-    print 'SF crime data downloaded\n\n'
-    raw_crime_table = sf_crime_table(tablename, Base.metadata)
-    raw_crime_table.drop(bind=engine, checkfirst=True)
-    raw_crime_table.append_column(Column('dup_row_id', Integer, primary_key=True))
-    raw_crime_table.create(bind=engine)
-    conn = engine.raw_connection()
-    cursor = conn.cursor()
-    zf = ZipFile(fpath)
-    # SF crime data has one file for each year...
-    for fn in zf.namelist():
-        with zf.open(fn, 'r') as f:
-            cursor.copy_expert("COPY %s \
-                (id, category, description, day_of_week, date, time, pd_district, \
-                 resolution, location_str, longitude, latitude) FROM STDIN WITH \
-                (FORMAT CSV, HEADER true, DELIMITER ',')" % tablename, f)
-        print '{0} imported'.format(fn)
-    conn.commit()
-    zf.close()
-    return 'Raw Crime data inserted'
-
-
-@celery_app.task
-def dedupe_crime():
-    # Step Two: Find duplicate records by ID
-    raw_crime_table = Table('raw_chicago_crimes_all', Base.metadata, 
-        autoload=True, autoload_with=engine, extend_existing=True)
-    dedupe_crime_table = Table('dedup_chicago_crimes_all', Base.metadata,
-        Column('dup_row_id', Integer, primary_key=True),
-        extend_existing=True)
-    dedupe_crime_table.drop(bind=engine, checkfirst=True)
-    dedupe_crime_table.create(bind=engine)
-    ins = dedupe_crime_table.insert()\
-        .from_select(
-            ['dup_row_id'], 
-            select([func.max(raw_crime_table.c.dup_row_id)])\
-            .group_by(raw_crime_table.c.id)
-        )
-    conn = engine.contextual_connect()
-    res = conn.execute(ins)
-    return 'Raw crime deduplicated'
 
 @celery_app.task
 def src_crime():
