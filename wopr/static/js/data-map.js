@@ -188,6 +188,7 @@
             this.charts = {};
             this.$el.spin('large');
             //if (!this.attributes.explore){
+            this.getAreaResults();
             this.getResults();
             //}
         },
@@ -207,6 +208,13 @@
             this.$el.after(this.explore.render().el);
             var route = "detail/" + $.param(this.query);
             router.navigate(route);
+        },
+        getAreaResults: function(){
+            var self = this;
+            var res = new AreaResultsView({
+                attributes: {query: this.query}
+            });
+            self.$el.append(res.render().el);
         },
         getResults: function(){
             var self = this;
@@ -247,6 +255,35 @@
             });
         }
     });
+
+    var AreaResultsView = Backbone.View.extend({
+        initialize: function(){
+            this.query = this.attributes.query;
+            this.render();
+        },
+        render: function(){
+            this.$el.empty();
+            this.$el.spin('large');
+            var self = this;
+            $.when(this.get_area_data()).then(            
+                function(resp){
+                    self.$el.spin(false);
+                    self.$el.html(template_cache('areaResultsTemplate',
+                        {resp:resp}));
+                }
+            )
+            return this;
+        },
+        get_area_data: function(){
+            var self = this;
+            return $.ajax({
+                url: '/api/area/',
+                datatype: 'json',
+                data: self.query
+            })
+        }
+    });
+
     var AboutView = Backbone.View.extend({
         initialize: function(){
             this.render();
@@ -282,8 +319,10 @@
             this.$el.html(template_cache('mapTemplate', {end: now, start: then}));
             //this.map = L.map('map').setView([41.880517,-87.644061], 11);
             this.map = L.map('map').setView([37.7733,-122.4367], 11);
-            L.tileLayer('https://{s}.tiles.mapbox.com/v3/derekeder.hehblhbj/{z}/{x}/{y}.png', {
+            L.tileLayer('https://{s}.tiles.mapbox.com/v3/apanella.j22h8aha/{z}/{x}/{y}.png', {
               attribution: '<a href="http://www.mapbox.com/about/maps/" target="_blank">Terms &amp; Feedback</a>'
+            //L.tileLayer('https://{s}.tiles.mapbox.com/v3/derekeder.hehblhbj/{z}/{x}/{y}.png', {
+            //  attribution: '<a href="http://www.mapbox.com/about/maps/" target="_blank">Terms &amp; Feedback</a>'
             }).addTo(this.map);
             this.map.drawnItems = new L.FeatureGroup();
             this.map.addLayer(this.map.drawnItems);

@@ -11,6 +11,7 @@ from sqlalchemy.exc import NoSuchTableError
 from sqlalchemy.types import NullType
 from sqlalchemy.sql.expression import cast
 from geoalchemy2 import Geometry
+from geoalchemy2.functions import ST_AsGeoJSON
 from operator import itemgetter
 from itertools import groupby
 from cStringIO import StringIO
@@ -19,7 +20,7 @@ from shapely.wkb import loads
 from shapely.geometry import box, asShape
 from collections import OrderedDict
 
-from wopr.models import MasterTable, MetaTable
+from wopr.models import MasterTable, MetaTable, CensusTable
 from wopr.database import session, app_engine as engine, Base
 
 api = Blueprint('api', __name__)
@@ -67,16 +68,17 @@ def crossdomain(origin=None, methods=None, headers=None,
         return update_wrapper(wrapped_function, f)
     return decorator
 
-def make_query(table, raw_query_params):
+def make_query(table, raw_query_params, resp=None):
     table_keys = table.columns.keys()
     args_keys = raw_query_params.keys()
-    resp = {
-        'meta': {
-            'status': 'error',
-            'message': '',
-        },
-        'objects': [],
-    }
+    if not resp:
+        resp = {
+            'meta': {
+                'status': 'error',
+                'message': '',
+            },
+            'objects': [],
+        }
     status_code = 200
     query_clauses = []
     valid_query = True
@@ -101,7 +103,7 @@ def make_query(table, raw_query_params):
         elif operator == 'in':
             query = column.in_(query_value.split(','))
             query_clauses.append(query)
-        elif operator == 'within':
+        elif operator in ['within', 'intersects']:
             geo = json.loads(query_value)
             if 'features' in geo.keys():
                 val = geo['features'][0]['geometry']
@@ -116,7 +118,11 @@ def make_query(table, raw_query_params):
                 x, y = getSizeInDegrees(100, lat)
                 val = shape.buffer(y).__geo_interface__
             val['crs'] = {"type":"name","properties":{"name":"EPSG:4326"}}
-            query = column.ST_Within(func.ST_GeomFromGeoJSON(json.dumps(val)))
+            if operator == 'within':
+                query = column.ST_Within(func.ST_GeomFromGeoJSON(json.dumps(val)))
+            elif operator == 'intersects':
+                query =\
+                    column.ST_Intersects(func.ST_GeomFromGeoJSON(json.dumps(val)))
             query_clauses.append(query)
         elif operator.startswith('time_of_day'):
             if operator.endswith('ge'):
@@ -205,6 +211,105 @@ def make_csv(data):
     writer = csv.writer(outp)
     writer.writerows(data)
     return outp.getvalue()
+
+@api.route('/api/area/')
+@crossdomain(origin="*")
+def area():
+    land_only = True
+    raw_query_params = request.args.copy()
+    # Pull the land contours
+    if 'dataset_name' in raw_query_params.keys():
+        table_name = raw_query_params['dataset_name']
+        del raw_query_params['dataset_name']
+    del raw_query_params['obs_date__ge']
+    del raw_query_params['obs_date__le']
+    del raw_query_params['agg']
+    raw_query_params['geom__intersects'] = raw_query_params['location_geom__within']
+    del raw_query_params['location_geom__within']
+    # Pull data from meta_table
+    meta_table = Table('sf_meta', Base.metadata, autoload=True,
+        autoload_with=engine)
+    meta_query = session.query(
+        meta_table.c['table_name'],
+        meta_table.c['human_name']
+    ).filter('area_q')
+    datasets = meta_query.all()
+    resp = {
+        'meta': {
+            'status': 'error',
+            'message': '',
+        },
+        'objects': [],
+    }
+    for dataset in datasets:
+        table_name = dataset[0]
+        human_name = dataset[1]
+        table = Table(table_name, Base.metadata,
+            autoload=True, autoload_with=engine)
+        valid_query, query_clauses, resp, status_code =\
+            make_query(table, raw_query_params, resp)
+        if valid_query:
+            val = json.loads(raw_query_params['geom__intersects'])['geometry']
+            val['crs'] = {"type":"name", "properties":{"name":"EPSG:4326"}}
+            query_geom = json.dumps(val)
+            if land_only:
+                land_table = Table('sf_shore', Base.metadata,
+                    autoload=True, autoload_with=engine)
+                land_val = session.query(
+                    func.ST_AsGeoJSON(func.ST_Intersection(
+                        func.ST_GeomFromGeoJSON(query_geom),
+                        land_table.c['geom']
+                    ))
+                ).first()[0]
+                land_val = json.loads(land_val)
+                land_val['crs'] = {"type":"name","properties":{"name":"EPSG:4326"}}
+                land_geom = json.dumps(land_val)
+            else:
+                land_geom = query_geom
+            base_query = session.query(
+                func.sum(
+                    func.ST_Area(func.ST_Intersection(func.ST_GeomFromGeoJSON(query_geom),
+                        table.c['geom']))
+                ) /\
+                func.ST_Area(func.ST_GeomFromGeoJSON(land_geom))
+            )
+            # Applying this filtering makes the query compute the actual
+            # intersection only with polygons that actually intersects
+            for clause in query_clauses:
+                base_query = base_query.filter(clause)
+            values = [v for v in base_query.all()]
+            for v in values:
+                d = {
+                    'dataset_name': table_name, 
+                    'human_name': human_name,
+                    'ratio': round(v[0], 4)
+                }
+                resp['objects'].append(d)
+    resp['meta']['status'] = 'ok'
+    resp = make_response(json.dumps(resp, default=dthandler), status_code)
+    resp.headers['Content-Type'] = 'application/json'
+    return resp
+
+
+@api.route('/api/pop/')
+@crossdomain(origin="*")
+def pop():
+    raw_query_params = request.args.copy()
+    valid_query, query_clauses, resp, status_code = make_query(CensusTable, raw_query_params)
+    if valid_query:
+        base_query = session.query(func.sum(CensusTable.c['pop10']),
+            func.sum(CensusTable.c['housing10']))
+        for clause in query_clauses:
+            base_query = base_query.filter(clause)
+        values = [v for v in base_query.all()]
+        for v in values:
+            d = {'pop': v[0], 'housing': v[1]}
+            resp['objects'].append(d)
+        resp['meta']['status'] = 'ok'
+    resp = make_response(json.dumps(resp, default=dthandler), status_code)
+    resp.headers['Content-Type'] = 'application/json'
+    return resp
+
 
 @api.route('/api/master/')
 @crossdomain(origin="*")
