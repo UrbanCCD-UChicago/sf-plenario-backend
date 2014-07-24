@@ -278,11 +278,13 @@ def area():
             for clause in query_clauses:
                 base_query = base_query.filter(clause)
             values = [v for v in base_query.all()]
+            print values
+            print '\n\n'
             for v in values:
                 d = {
                     'dataset_name': table_name, 
                     'human_name': human_name,
-                    'ratio': round(v[0], 4)
+                    'ratio': round(v[0] if v[0] else 0.0, 4)
                 }
                 resp['objects'].append(d)
     resp['meta']['status'] = 'ok'
