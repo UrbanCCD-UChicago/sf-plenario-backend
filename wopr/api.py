@@ -20,7 +20,7 @@ from shapely.wkb import loads
 from shapely.geometry import box, asShape
 from collections import OrderedDict
 
-from wopr.models import MasterTable, MetaTable, CensusTable
+from wopr.models import MasterTable, MetaTable
 from wopr.database import session, app_engine as engine, Base
 
 api = Blueprint('api', __name__)
@@ -294,11 +294,13 @@ def area():
 @api.route('/api/pop/')
 @crossdomain(origin="*")
 def pop():
+    census_table = Table('sf_census_blocks', Base.metadata,
+        autoload=True, autoload_with=engine)
     raw_query_params = request.args.copy()
-    valid_query, query_clauses, resp, status_code = make_query(CensusTable, raw_query_params)
+    valid_query, query_clauses, resp, status_code = make_query(census_table, raw_query_params)
     if valid_query:
-        base_query = session.query(func.sum(CensusTable.c['pop10']),
-            func.sum(CensusTable.c['housing10']))
+        base_query = session.query(func.sum(census_table.c['pop10']),
+            func.sum(census_table.c['housing10']))
         for clause in query_clauses:
             base_query = base_query.filter(clause)
         values = [v for v in base_query.all()]

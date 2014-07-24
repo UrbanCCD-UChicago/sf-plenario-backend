@@ -144,10 +144,6 @@ def import_shapefile(fpath, name, force_multipoly=False, proj=4326):
             if not force_multipoly and r['geometry']['type'] == 'MultiPolygon':
                 return import_shapefile(fpath, name, force_multipoly=True, proj=proj)
             row_dict = dict((k.lower(), v) for k, v in r['properties'].iteritems())
-            if row_dict['shape_area'] > 10**8:
-                print 'Shape area: ' + str(row_dict['shape_area'])
-            if row_dict['shape_len'] > 10**8:
-                print 'Shape len: ' + str(row_dict['shape_len'])
             # GeoJSON intermediate representation
             geom_json = json.loads(str(r['geometry']).replace('\'', '"')\
                                    .replace('(', '[').replace(')', ']'))
@@ -177,9 +173,6 @@ def import_shapefile(fpath, name, force_multipoly=False, proj=4326):
                     return "Failed."
                 features = []
                 print count
-    #ins = shp_table.insert(features)
-    #conn = engine.contextual_connect()
-    #conn.execute(ins)
     return 'Table {0} created from shapefile'.format(name)
 
 def create_meta_table():

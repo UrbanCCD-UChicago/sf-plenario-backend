@@ -14,14 +14,15 @@ if __name__ == "__main__":
     #sf_dat_crime(fpath='data/sfpd_incident_all_csv.zip', crime_type='property')
     #import_shapefile('./data/sf_census_blocks.zip', 'sf_census_blocks', proj=4326)
     #import_shapefile('./data/CI.2.d.BlockParties.zip', 'sf_block_parties', proj=proj_str)
-    #import_shapefile('./data/HEF.2.a.OpenSpace_total.zip', 'sf_open_space', proj=proj_str)
+    import_shapefile('./data/sf_open_space.zip', 'sf_open_space', proj=proj_str)
     #import_shapefile('./data/HWB.2.a.FarmersMarketAccess.zip', 'sf_farmers_markets',
     #    proj=proj_str)
-    #import_shapefile('./data/building_footprint.zip', 'sf_building_footprint',
-    #    proj=proj_str)
-    import_shapefile('./data/CI.1.b.NeighborhoodCommercialZoning.zip', 'sf_commercial_zoning',
+    import_shapefile('./data/sf_building_footprint.zip', 'sf_building_footprint',
         proj=proj_str)
-    #import_shapefile('./data/building_footprint.zip', 'sf_building_footprint',
+    #import_shapefile('./data/CI.1.b.NeighborhoodCommercialZoning.zip', 'sf_commercial_zoning',
+    #    proj=proj_str)
+    import_shapefile('./data/sf_building_footprint.zip', 'sf_building_footprint',
+        proj=proj_str)
     #import_shapefile('./data/sfshoreext.zip', 'sf_shore', proj=proj_str)
     #import_shapefile('./data/SF_Urban_Tree_Canopy.zip', 'sf_tree_canopy', proj=proj_str)
     #create_meta_table()

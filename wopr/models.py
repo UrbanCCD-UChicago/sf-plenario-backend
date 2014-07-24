@@ -16,8 +16,6 @@ MetaTable = Table('meta_master', Base.metadata,
 MasterTable = Table('dat_master', Base.metadata,
     autoload=True, autoload_with=engine)
 
-CensusTable = Table('sf_census_blocks', Base.metadata,
-    autoload=True, autoload_with=engine)
 
 def crime_table(name, metadata):
     table = Table(name, metadata,
