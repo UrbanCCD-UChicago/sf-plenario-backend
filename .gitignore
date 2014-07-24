@@ -7,3 +7,4 @@ Icon?
 celerybeat-schedule
 data/
 notebooks/
+sf_etl.py
