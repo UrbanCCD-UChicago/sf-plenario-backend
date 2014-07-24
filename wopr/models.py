@@ -10,7 +10,7 @@ from fiona import prop_width, prop_type
 from datetime import datetime
 from wopr.database import Base, app_engine as engine, Point
 
-MetaTable = Table('meta_master', Base.metadata,
+MetaTable = Table('sf_meta', Base.metadata,
     autoload=True, autoload_with=engine)
 
 MasterTable = Table('dat_master', Base.metadata,

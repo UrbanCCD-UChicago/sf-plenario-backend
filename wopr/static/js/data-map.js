@@ -215,6 +215,7 @@
                 attributes: {query: this.query}
             });
             self.$el.append(res.render().el);
+            $('#about').hide();
         },
         getResults: function(){
             var self = this;
