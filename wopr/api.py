@@ -224,8 +224,14 @@ def area():
     del raw_query_params['obs_date__ge']
     del raw_query_params['obs_date__le']
     del raw_query_params['agg']
-    raw_query_params['geom__intersects'] = raw_query_params['location_geom__within']
-    del raw_query_params['location_geom__within']
+    if 'location_geom__within' in raw_query_params.keys():
+        raw_query_params['geom__intersects'] = raw_query_params['location_geom__within']
+        del raw_query_params['location_geom__within']
+        val = json.loads(raw_query_params['geom__intersects'])['geometry']
+        val['crs'] = {"type":"name", "properties":{"name":"EPSG:4326"}}
+        query_geom = json.dumps(val)
+    else:
+        query_geom = None
     # Pull data from meta_table
     meta_table = Table('sf_meta', Base.metadata, autoload=True,
         autoload_with=engine)
@@ -249,37 +255,36 @@ def area():
         valid_query, query_clauses, resp, status_code =\
             make_query(table, raw_query_params, resp)
         if valid_query:
-            val = json.loads(raw_query_params['geom__intersects'])['geometry']
-            val['crs'] = {"type":"name", "properties":{"name":"EPSG:4326"}}
-            query_geom = json.dumps(val)
             if land_only:
                 land_table = Table('sf_shore', Base.metadata,
                     autoload=True, autoload_with=engine)
-                land_val = session.query(
-                    func.ST_AsGeoJSON(func.ST_Intersection(
+                if query_geom:
+                    hot_geom = func.ST_Intersection(
                         func.ST_GeomFromGeoJSON(query_geom),
                         land_table.c['geom']
-                    ))
-                ).first()[0]
+                    )
+                else:
+                    hot_geom = land_table.c['geom']
+                land_val = session.query(func.ST_AsGeoJSON(hot_geom)).first()[0]
                 land_val = json.loads(land_val)
                 land_val['crs'] = {"type":"name","properties":{"name":"EPSG:4326"}}
                 land_geom = json.dumps(land_val)
             else:
                 land_geom = query_geom
+            if query_geom:
+                hot_geom = func.ST_Intersection(func.ST_GeomFromGeoJSON(query_geom),
+                                                table.c['geom'])
+            else:
+                hot_geom = table.c['geom']
             base_query = session.query(
-                func.sum(
-                    func.ST_Area(func.ST_Intersection(func.ST_GeomFromGeoJSON(query_geom),
-                        table.c['geom']))
-                ) /\
-                func.ST_Area(func.ST_GeomFromGeoJSON(land_geom))
+                func.sum(func.ST_Area(hot_geom)) /\
+                    func.ST_Area(func.ST_GeomFromGeoJSON(land_geom))
             )
             # Applying this filtering makes the query compute the actual
             # intersection only with polygons that actually intersects
             for clause in query_clauses:
                 base_query = base_query.filter(clause)
             values = [v for v in base_query.all()]
-            print values
-            print '\n\n'
             for v in values:
                 d = {
                     'dataset_name': table_name, 
@@ -291,7 +296,6 @@ def area():
     resp = make_response(json.dumps(resp, default=dthandler), status_code)
     resp.headers['Content-Type'] = 'application/json'
     return resp
-
 
 @api.route('/api/pop/')
 @crossdomain(origin="*")
@@ -313,7 +317,6 @@ def pop():
     resp = make_response(json.dumps(resp, default=dthandler), status_code)
     resp.headers['Content-Type'] = 'application/json'
     return resp
-
 
 @api.route('/api/master/')
 @crossdomain(origin="*")
