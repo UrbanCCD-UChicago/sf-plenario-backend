@@ -1,11 +1,16 @@
 import os
 import re
+from flask import request
 import psycopg2
 from sqlalchemy import create_engine, types
 from sqlalchemy.orm import sessionmaker, scoped_session
 from sqlalchemy.pool import NullPool
 from sqlalchemy.ext.declarative import declarative_base
 from psycopg2.extensions import adapt, register_adapter, AsIs
+
+# Read the connection parameters from file
+if 'WOPR_CONN' not in os.environ.keys():
+    os.environ['WOPR_CONN'] = open('/home/ubuntu/wopr_conn', 'r').readline()
 
 app_engine = create_engine(os.environ['WOPR_CONN'], convert_unicode=True)
 task_engine = create_engine(
