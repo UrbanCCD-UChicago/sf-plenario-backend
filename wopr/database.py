@@ -9,8 +9,8 @@ from sqlalchemy.ext.declarative import declarative_base
 from psycopg2.extensions import adapt, register_adapter, AsIs
 
 # Read the connection parameters from file
-if 'WOPR_CONN' not in os.environ.keys():
-    os.environ['WOPR_CONN'] = open('/home/ubuntu/wopr_conn', 'r').readline()
+#if 'WOPR_CONN' not in os.environ.keys():
+#    os.environ['WOPR_CONN'] = open('/home/ubuntu/wopr_conn', 'r').readline()
 
 app_engine = create_engine(os.environ['WOPR_CONN'], convert_unicode=True)
 task_engine = create_engine(
