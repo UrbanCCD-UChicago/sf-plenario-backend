@@ -1,0 +1,6 @@
+#!/bin/bash
+
+exec gunicorn plenario_sf:app \
+    -b 127.0.0.1:8000 \
+    --workers 3 \
+    --log-file .logs/gunicorn-log.txt
