@@ -20,7 +20,7 @@ import fiona
 from shapely.geometry import shape, Polygon, MultiPolygon
 import json
 import pyproj
-from ext.py_geo_voronoi import VoronoiGeoJson_Polygons
+from ext.py_geo_voronoi.voronoi_poly import VoronoiGeoJson_Polygons
 
 def sf_dat_crime(fpath=None, crime_type='violent'):
     #raw_crime = sf_raw_crime(fpath=fpath)

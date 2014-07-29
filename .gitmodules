@@ -1,3 +1,0 @@
-[submodule "ext/py_geo_voronoi"]
-	path = ext/py_geo_voronoi
-	url = git://github.com/Softbass/py_geo_voronoi
