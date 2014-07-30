@@ -261,6 +261,7 @@ def area():
         },
         'objects': [],
     }
+    status_code = 200
     for dataset in datasets:
         table_name = dataset[0]
         human_name = dataset[1]
@@ -351,6 +352,7 @@ def count():
         },
         'objects': [],
     }
+    status_code = 200
     for dataset in datasets:
         table_name = dataset[0]
         human_name = dataset[1]
