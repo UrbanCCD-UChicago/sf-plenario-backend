@@ -212,7 +212,8 @@ def create_meta_table():
     return "Meta table created."
 
 def add_dataset_meta(name, file_name='', human_name='', description='',
-    count_q=False, area_q=False, dist_q=False, temp_q=False):
+    val_attr='', count_q=False, area_q=False, dist_q=False,
+    temp_q=False, weighted_q=False):
     """ Add infotmation about a dataset in the meta table """
     if human_name == '':
         human_name = name
@@ -220,8 +221,9 @@ def add_dataset_meta(name, file_name='', human_name='', description='',
         autoload=True, autoload_with=engine, extend_existing=True)
     row = {'table_name': name, 'file_name': file_name,
         'human_name': human_name,'description': description,
-        'last_update': func.current_timestamp(), 'count_q': count_q,
-        'area_q': area_q, 'dist_q': dist_q, 'temp_q': temp_q}
+        'last_update': func.current_timestamp(), 'val_attr': val_attr,
+        'count_q': count_q, 'area_q': area_q, 'dist_q': dist_q,
+        'temp_q': temp_q, 'weighted_q': weighted_q}
     ins = meta_table.insert(row)
     conn = engine.contextual_connect()
     conn.execute(ins)

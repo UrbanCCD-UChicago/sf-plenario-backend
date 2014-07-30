@@ -68,10 +68,12 @@ def sf_meta_table(metadata):
             Column( 'description',  String(length=200)          ),
             Column( 'file_name',    String(length=30)           ),
             Column( 'last_update',  DateTime, default=datetime.now()     ),
+            Column( 'val_attr',     String(length=30)           ),
             Column( 'count_q',      Boolean                     ),
             Column( 'area_q',       Boolean                     ),
             Column( 'dist_q',       Boolean                     ),
             Column( 'temp_q',       Boolean                     ),
+            Column( 'weighted_q',   Boolean                     ),
     extend_existing=True)
     return table
 

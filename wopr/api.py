@@ -27,10 +27,11 @@ api = Blueprint('api', __name__)
 
 dthandler = lambda obj: obj.isoformat() if isinstance(obj, date) else None
 
-query_types = [
-    {'type': 'area_q', 'func': lambda **kwargs: area(**kwargs)},
-    {'type': 'count_q', 'func': lambda **kwargs: count(**kwargs)}
-]
+query_types = {
+    'area':     {'func': lambda **kwargs: area(**kwargs)    },
+    'count':    {'func': lambda **kwargs: count(**kwargs)   },
+    'weighted': {'func': lambda **kwargs: weighted(**kwargs)}
+}
 
 def crossdomain(origin=None, methods=None, headers=None,
                 max_age=21600, attach_to_all=True,
@@ -217,18 +218,16 @@ def make_csv(data):
     writer.writerows(data)
     return outp.getvalue()
 
-@api.route('/api/area/')
-#@crossdomain(origin="*")
-def area_endpoint():
-    resp, status_code = area()
+@api.route('/api/indicators/types/<query_type>/')
+@crossdomain(origin='*')
+def indicators_by_type(query_type):
+    resp, status_code = query_types[query_type]['func']()
     resp = make_response(json.dumps(resp, default=dthandler), status_code)
     resp.headers['Content-Type'] = 'application/json'
     return resp
-    
-def area():
-    land_only = True
+
+def area(land_only=True):
     raw_query_params = request.args.copy()
-    # Pull the land contours
     dataset_name = None
     if 'dataset_name' in raw_query_params.keys():
         dataset_name = raw_query_params['dataset_name']
@@ -271,8 +270,12 @@ def area():
             make_query(table, raw_query_params, resp)
         if valid_query:
             if land_only:
+                # Retrieve the shore contours to consider land only
                 land_table = Table('sf_shore', Base.metadata,
                     autoload=True, autoload_with=engine)
+                # If a query geometry is provided, compute its intersection
+                # with the shore contours; otherwise, just use the land
+                # contours
                 if query_geom:
                     hot_geom = func.ST_Intersection(
                         func.ST_GeomFromGeoJSON(query_geom),
@@ -287,6 +290,10 @@ def area():
             else:
                 land_geom = query_geom
             if query_geom:
+                # query_geom is used instead of land_geom to compute
+                # intersections since the geometries in the queried dataset are
+                # all on land, and query geom is usually a simpler geometry
+                # than land_geom
                 hot_geom = func.ST_Intersection(func.ST_GeomFromGeoJSON(query_geom),
                                                 table.c['geom'])
             else:
@@ -314,14 +321,6 @@ def area():
             resp['objects'] = []
             break
     return resp, status_code
-
-@api.route('/api/count/')
-@crossdomain(origin="*")
-def count_endpoint():
-    resp, status_code = count()
-    resp = make_response(json.dumps(resp, default=dthandler), status_code)
-    resp.headers['Content-Type'] = 'application/json'
-    return resp
     
 def count():
     raw_query_params = request.args.copy()
@@ -361,7 +360,9 @@ def count():
         valid_query, query_clauses, resp, status_code =\
             make_query(table, raw_query_params, resp)
         if valid_query:
-            base_query = session.query(func.count(1))
+            base_query = session.query(
+                func.count(table.c['row_id'])
+            )
             for clause in query_clauses:
                 base_query = base_query.filter(clause)
             values = [v for v in base_query.all()]
@@ -371,6 +372,103 @@ def count():
                     'human_name': human_name,
                     'query_type': 'count',
                     'value': v[0]
+                }
+                resp['objects'].append(d)
+        else:
+            resp['meta']['status'] = 'error'
+            resp['meta']['message'] = 'Invalid query.'
+            resp['objects'] = []
+            break
+    return resp, status_code
+
+def weighted():
+    """
+    This type of query uses datasets that provide information about some fixed
+    geometries, like zip codes or census tracts.
+    """
+    raw_query_params = request.args.copy()
+    dataset_name = None
+    if 'dataset_name' in raw_query_params.keys():
+        dataset_name = raw_query_params['dataset_name']
+        del raw_query_params['dataset_name']
+    del raw_query_params['obs_date__ge']
+    del raw_query_params['obs_date__le']
+    del raw_query_params['agg']
+    if 'location_geom__within' in raw_query_params.keys():
+        raw_query_params['geom__intersects'] = raw_query_params['location_geom__within']
+        del raw_query_params['location_geom__within']
+        val = json.loads(raw_query_params['geom__intersects'])['geometry']
+        val['crs'] = {"type":"name", "properties":{"name":"EPSG:4326"}}
+        query_geom = json.dumps(val)
+    else:
+        query_geom = None
+    # Pull data from meta_table
+    meta_table = Table('sf_meta', Base.metadata, autoload=True,
+        autoload_with=engine)
+    meta_query = session.query(
+        meta_table.c['table_name'],
+        meta_table.c['human_name'],
+        meta_table.c['val_attr']
+    ).filter('weighted_q')
+    if dataset_name:
+        meta_query = meta_query.filter(meta_table.c['table_name'] == dataset_name)
+    datasets = meta_query.all()
+    resp = {
+        'meta': {
+            'status': 'ok',
+            'message': '',
+        },
+        'objects': [],
+    }
+    status_code = 200
+    for dataset in datasets:
+        table_name = dataset[0]
+        human_name = dataset[1]
+        val_attr = dataset[2]
+        table = Table(table_name, Base.metadata,
+            autoload=True, autoload_with=engine)
+        valid_query, query_clauses, resp, status_code =\
+            make_query(table, raw_query_params, resp)
+        if valid_query:
+            # Retrieve the shore contours to consider land only
+            land_table = Table('sf_shore', Base.metadata,
+                autoload=True, autoload_with=engine)
+            # If a query geometry is provided, compute its intersection
+            # with the shore contours; otherwise, just use the land
+            # contours
+            if query_geom:
+                hot_geom = func.ST_Intersection(
+                    func.ST_GeomFromGeoJSON(query_geom),
+                    land_table.c['geom']
+                )
+            else:
+                hot_geom = land_table.c['geom']
+            land_val = session.query(func.ST_AsGeoJSON(hot_geom)).first()[0]
+            land_val = json.loads(land_val)
+            land_val['crs'] = {"type":"name","properties":{"name":"EPSG:4326"}}
+            land_geom = json.dumps(land_val)
+            if query_geom:
+                # compute the intersections
+                hot_geom = func.ST_Intersection(func.ST_GeomFromGeoJSON(land_geom),
+                                                table.c['geom'])
+            else:
+                # if no query_geom is provided, just consider everything
+                hot_geom = table.c['geom']
+            base_query = session.query(
+                func.sum(func.ST_Area(hot_geom) * table.c[val_attr]) /\
+                    func.ST_Area(func.ST_GeomFromGeoJSON(land_geom))
+            )
+            # Applying this filtering makes the query compute the actual
+            # intersection only with polygons that actually intersects
+            for clause in query_clauses:
+                base_query = base_query.filter(clause)
+            values = [v for v in base_query.all()]
+            for v in values:
+                d = {
+                    'dataset_name': table_name, 
+                    'human_name': human_name,
+                    'query_type': 'weighted',
+                    'value': round(v[0] if v[0] else 0.0, 4)
                 }
                 resp['objects'].append(d)
         else:
@@ -412,8 +510,8 @@ def indicators():
         },
         'objects': [],
     }
-    for query_type in query_types:
-        resp, status_code = query_type['func']()
+    for name, attr in query_types.items():
+        resp, status_code = attr['func']()
         for obj in resp['objects']:
             resp_all['objects'].append(obj)
     resp_all['meta']['status'] = 'ok'
