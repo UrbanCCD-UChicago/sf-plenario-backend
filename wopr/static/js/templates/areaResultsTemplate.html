@@ -3,13 +3,14 @@
 <table class="table table-striped">
     <thead>
         <th>Dataset</th>
-        <th>Proportion</th>
+        <th>Value</th>
     </thead>
     <tbody>
     <% $.each(resp.objects, function(i, obj){ %>
         <tr>
             <td><%= obj.human_name %></td>
-            <td><%= obj.ratio %></td>
+            <td><%= obj.value %></td>
+            <td><small>(<%= obj.query_type %>)</small></td>
         </tr>
     <% }) %>
     </tbody>

@@ -13,7 +13,10 @@ if __name__ == "__main__":
     #sf_dat_crime(fpath='data/sfpd_incident_all_csv.zip', crime_type='violent')
     #sf_dat_crime(fpath='data/sfpd_incident_all_csv.zip', crime_type='property')
     #import_shapefile('./data/sf_census_blocks.zip', 'sf_census_blocks', proj=4326)
-    #import_shapefile('./data/CI.2.d.BlockParties.zip', 'sf_block_parties', proj=proj_str)
+    import_shapefile('./data/CI.2.d.BlockParties.zip', 'sf_block_parties',
+        proj=proj_str, voronoi=False)
+    import_shapefile('./data/CI.1.a.CommunityCenterAccess.zip',
+        'sf_community_centers', proj=proj_str)
     #import_shapefile('./data/sf_open_space.zip', 'sf_open_space', proj=proj_str)
     #import_shapefile('./data/HWB.2.a.FarmersMarketAccess.zip', 'sf_farmers_markets',
     #    proj=proj_str)
@@ -30,4 +33,7 @@ if __name__ == "__main__":
     #add_dataset_meta('sf_building_footprint', human_name='Building footprint',
     #    area_q=True, dist_q=True)
     #add_dataset_meta('sf_tree_canopy', human_name='Tree canopy', area_q=True)
-    pass
+    add_dataset_meta('sf_block_parties', human_name='Block parties',
+        count_q=True, dist_q=True)
+    add_dataset_meta('sf_community_centers', human_name='Community centers',
+        count_q=True, dist_q=True)

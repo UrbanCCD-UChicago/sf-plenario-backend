@@ -278,7 +278,7 @@
         get_area_data: function(){
             var self = this;
             return $.ajax({
-                url: '/api/area/',
+                url: '/api/indicators/',
                 datatype: 'json',
                 data: self.query
             })

@@ -27,6 +27,11 @@ api = Blueprint('api', __name__)
 
 dthandler = lambda obj: obj.isoformat() if isinstance(obj, date) else None
 
+query_types = [
+    {'type': 'area_q', 'func': lambda **kwargs: area(**kwargs)},
+    {'type': 'count_q', 'func': lambda **kwargs: count(**kwargs)}
+]
+
 def crossdomain(origin=None, methods=None, headers=None,
                 max_age=21600, attach_to_all=True,
                 automatic_options=True): # pragma: no cover
@@ -213,13 +218,20 @@ def make_csv(data):
     return outp.getvalue()
 
 @api.route('/api/area/')
-@crossdomain(origin="*")
+#@crossdomain(origin="*")
+def area_endpoint():
+    resp, status_code = area()
+    resp = make_response(json.dumps(resp, default=dthandler), status_code)
+    resp.headers['Content-Type'] = 'application/json'
+    return resp
+    
 def area():
     land_only = True
     raw_query_params = request.args.copy()
     # Pull the land contours
+    dataset_name = None
     if 'dataset_name' in raw_query_params.keys():
-        table_name = raw_query_params['dataset_name']
+        dataset_name = raw_query_params['dataset_name']
         del raw_query_params['dataset_name']
     del raw_query_params['obs_date__ge']
     del raw_query_params['obs_date__le']
@@ -239,10 +251,12 @@ def area():
         meta_table.c['table_name'],
         meta_table.c['human_name']
     ).filter('area_q')
+    if dataset_name:
+        meta_query = meta_query.filter(meta_table.c['table_name'] == dataset_name)
     datasets = meta_query.all()
     resp = {
         'meta': {
-            'status': 'error',
+            'status': 'ok',
             'message': '',
         },
         'objects': [],
@@ -289,17 +303,84 @@ def area():
                 d = {
                     'dataset_name': table_name, 
                     'human_name': human_name,
-                    'ratio': round(v[0] if v[0] else 0.0, 4)
+                    'query_type': 'area',
+                    'value': round(v[0] if v[0] else 0.0, 4)
                 }
                 resp['objects'].append(d)
-    resp['meta']['status'] = 'ok'
+        else:
+            resp['meta']['status'] = 'error'
+            resp['meta']['message'] = 'Invalid query.'
+            resp['objects'] = []
+            break
+    return resp, status_code
+
+@api.route('/api/count/')
+@crossdomain(origin="*")
+def count_endpoint():
+    resp, status_code = count()
     resp = make_response(json.dumps(resp, default=dthandler), status_code)
     resp.headers['Content-Type'] = 'application/json'
     return resp
+    
+def count():
+    raw_query_params = request.args.copy()
+    dataset_name = None
+    if 'dataset_name' in raw_query_params.keys():
+        dataset_name = raw_query_params['dataset_name']
+        del raw_query_params['dataset_name']
+    if 'location_geom__within' in raw_query_params.keys():
+        raw_query_params['geom__within'] = raw_query_params['location_geom__within']
+        del raw_query_params['location_geom__within']
+    del raw_query_params['obs_date__ge']
+    del raw_query_params['obs_date__le']
+    del raw_query_params['agg']
+    # Pull data from meta_table
+    meta_table = Table('sf_meta', Base.metadata, autoload=True,
+        autoload_with=engine)
+    meta_query = session.query(
+        meta_table.c['table_name'],
+        meta_table.c['human_name']
+    ).filter('count_q')
+    if dataset_name:
+        meta_query = meta_query.filter(meta_table.c['table_name'] == dataset_name)
+    datasets = meta_query.all()
+    resp = {
+        'meta': {
+            'status': 'ok',
+            'message': '',
+        },
+        'objects': [],
+    }
+    for dataset in datasets:
+        table_name = dataset[0]
+        human_name = dataset[1]
+        table = Table(table_name, Base.metadata,
+            autoload=True, autoload_with=engine)
+        valid_query, query_clauses, resp, status_code =\
+            make_query(table, raw_query_params, resp)
+        if valid_query:
+            base_query = session.query(func.count(1))
+            for clause in query_clauses:
+                base_query = base_query.filter(clause)
+            values = [v for v in base_query.all()]
+            for v in values:
+                d = {
+                    'dataset_name': table_name,
+                    'human_name': human_name,
+                    'query_type': 'count',
+                    'value': v[0]
+                }
+                resp['objects'].append(d)
+        else:
+            resp['meta']['status'] = 'error'
+            resp['meta']['message'] = 'Invalid query.'
+            resp['objects'] = []
+            break
+    return resp, status_code
 
 @api.route('/api/pop/')
 @crossdomain(origin="*")
-def pop():
+def pop(subquery=False):
     census_table = Table('sf_census_blocks', Base.metadata,
         autoload=True, autoload_with=engine)
     raw_query_params = request.args.copy()
@@ -314,9 +395,30 @@ def pop():
             d = {'pop': v[0], 'housing': v[1]}
             resp['objects'].append(d)
         resp['meta']['status'] = 'ok'
-    resp = make_response(json.dumps(resp, default=dthandler), status_code)
-    resp.headers['Content-Type'] = 'application/json'
+    if not subquery:
+        resp = make_response(json.dumps(resp, default=dthandler), status_code)
+        resp.headers['Content-Type'] = 'application/json'
     return resp
+
+@api.route('/api/indicators/')
+@crossdomain(origin="*")
+def indicators():
+    resp_all = {
+        'meta': {
+            'status': 'error',
+            'message': '',
+        },
+        'objects': [],
+    }
+    for query_type in query_types:
+        resp, status_code = query_type['func']()
+        for obj in resp['objects']:
+            resp_all['objects'].append(obj)
+    resp_all['meta']['status'] = 'ok'
+    resp_all = make_response(json.dumps(resp_all, default=dthandler), status_code)
+    resp_all.headers['Content-Type'] = 'application/json'
+    return resp_all
+
 
 @api.route('/api/master/')
 @crossdomain(origin="*")

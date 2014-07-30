@@ -181,7 +181,7 @@ def VoronoiLineEdges(PointsMap):
 
 def VoronoiGeoJson_MultiPolygons(PointsMap, BoundingBox="W",PlotMap=False):
 
-  vl=VoronoiPolygons(PointsMap, BoundingBox="W", PlotMap=PlotMap)      
+  vl=VoronoiPolygons(PointsMap, BoundingBox=BoundingBox, PlotMap=PlotMap)      
 
   cluster_id="VoronoiLattice"
   geojson={}
@@ -212,9 +212,9 @@ def VoronoiGeoJson_MultiPolygons(PointsMap, BoundingBox="W",PlotMap=False):
 
 def VoronoiGeoJson_Polygons(PointsMap, BoundingBox="W",PlotMap=False):
 
-  vl=VoronoiPolygons(PointsMap, BoundingBox="W", PlotMap=PlotMap)      
+  vl=VoronoiPolygons(PointsMap, BoundingBox=BoundingBox, PlotMap=PlotMap)      
 
-  output=""
+  output=[]
   for vl_num, data in vl.items():
 
     #print data
@@ -239,9 +239,11 @@ def VoronoiGeoJson_Polygons(PointsMap, BoundingBox="W",PlotMap=False):
     coords=[]
     geojson["geometry"]["coordinates"]=[list(data["obj_polygon"].exterior.coords)]
 
-    output+=json.dumps(geojson)#, sort_keys=True, indent=3)
-    output+="\n"
-  return output
+    output.append(geojson)
+
+    #output+=json.dumps(geojson)#, sort_keys=True, indent=3)
+    #output+="\n"
+  return json.dumps(output)
 
 def VoronoiPolygons(PointsMap, BoundingBox="W", PlotMap=False):
   global PlotIt

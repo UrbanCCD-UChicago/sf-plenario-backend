@@ -22,6 +22,11 @@ import json
 import pyproj
 from ext.py_geo_voronoi.voronoi_poly import VoronoiGeoJson_Polygons
 
+sf_bbox = [37.83440864730549,
+           -122.55729675292969,
+           37.648164160049525,
+           -122.35198974609375]
+
 def sf_dat_crime(fpath=None, crime_type='violent'):
     #raw_crime = sf_raw_crime(fpath=fpath)
     # Assume for now there's no duplicate in the raw data, which means we don't
@@ -105,7 +110,7 @@ def transform_proj(geom, source, target=4326):
     pt = pyproj.Proj(t_str, preserve_units=True)
     # This function works as a depth-first search, recursively calling itself until a
     # point is found, and converted (base case)
-    if type(geom[0]) == list:
+    if type(geom[0]) in (list, tuple):
         res = []
         for r in geom:
             res.append(transform_proj(r, source, target))
@@ -114,7 +119,8 @@ def transform_proj(geom, source, target=4326):
         res = pyproj.transform(ps, pt, geom[0], geom[1])
         return list(res)
     
-def import_shapefile(fpath, name, force_multipoly=False, proj=4326):
+def import_shapefile(fpath, name, force_multipoly=False, proj=4326,
+    voronoi=False):
     """Import a shapefile into the PostGIS database
 
     Keyword arguments:
@@ -133,6 +139,24 @@ def import_shapefile(fpath, name, force_multipoly=False, proj=4326):
         if shp.schema['geometry'].lower() != 'point':
             shp_table.append_column(Column('centroid', Geometry('POINT',
                                     srid=4326)))
+        # Add a column and compute Voronoi triangulation, if required
+        if shp.schema['geometry'].lower() == 'point' and voronoi:
+            pts = [p['geometry']['coordinates'] for p in shp.values()]
+            pts = transform_proj(pts, proj, 4326)
+            pts_map = dict([[str(i), p] for (i, p) in zip(range(len(pts)), pts)])
+            print len(pts_map)
+            vor_polygons = VoronoiGeoJson_Polygons(pts_map, BoundingBox=sf_bbox)
+            vor_polygons = json.loads(vor_polygons)
+            vor_polygons = sorted(vor_polygons,
+                key=lambda r: int(r['properties']['_domain_id']))
+            shp_table.append_column(Column('voronoi', Geometry('POLYGON',
+                                    srid=4326)))
+            vor_p={}
+            vor_p['features'] = vor_polygons
+            vor_p['type'] = 'FeatureCollection'
+            with open('data/voronoi.json', 'w') as outfile:
+                outfile.write(json.dumps(vor_p))
+            print len(vor_polygons)
         shp_table.create(bind=engine)
         features = []
         count = 0
@@ -159,6 +183,9 @@ def import_shapefile(fpath, name, force_multipoly=False, proj=4326):
             if shp.schema['geometry'].lower() != 'point':
                 row_dict['centroid'] =\
                     'SRID=4326;{0}'.format(geom.centroid.wkt)
+            if shp.schema['geometry'].lower() == 'point' and voronoi:
+                vor_poly = shape(vor_polygons[count]['geometry'])
+                row_dict['voronoi'] = 'SRID=4326;{0}'.format(vor_poly.wkt)
             features.append(row_dict)
             count += 1
             #if count > 100: break
