@@ -2,26 +2,38 @@
 {% block content %}
 <div class="container">
   <div class='col-md-10 col-md-offset-1'>
-      <h1>Plenar.io geospatial open data platform</h1>
+      <h1>API for San Francisco Sustainable Systems Project</h1>
+
+      <p>
+        This page describes the RESTful API developed to access the datasets relevant to
+      the San Francisco Sustainable Systems project.<br /> The framework
+      is based on <a href="http://plenario.datamade.us">Plenar.io</a>,
+      developed by <a href="http://datamade.us">Datamade</a> and the <a
+      href="http://urbanccd.org">Urban Center for Computation and Data</a>.
+
       <p>
           <strong>Example applications</strong>
           <ul>
-              <li><a href="{{ url_for('views.grid_view') }}">Grid Aggregation</a></li>
+              <!-- <li><a href="{{ url_for('views.grid_view') }}">Grid Aggregation</a></li> --!>
               <li><a href="{{ url_for('views.map_view') }}">Data Explorer</a></li>
           </ul>
       </p>
       <hr />
       <h2>API documentation</h2>
       <p>
-          <strong>Currently there are three endpoints:</strong>
+          <strong>Endpoints:</strong>
           <ul>
               <li>/api/</li>
-              <li>/api/master/</li>
+              <li>/api/indicators/</li>
+              <li>/api/indicators/&lt;dataset_name&gt;/</li>
+              <li>/api/indicators/type/&lt;query_type&gt;/</li>
               <li>/api/fields/&lt;dataset_name&gt;/</li>
-              <li>/api/detail-aggregate/</li>
-              <li>/api/detail/</li>
+              <li>/api/detail/&lt;dataset_name&gt;/</li>
           </ul>
       </p>
+
+      <h2> ------ OLD</h2>
+
       <h3>/api/</h3>
       <p>
           This is the “data about the data” endpoint. It contains a record for
