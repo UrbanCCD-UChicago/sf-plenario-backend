@@ -28,9 +28,10 @@ api = Blueprint('api', __name__)
 dthandler = lambda obj: obj.isoformat() if isinstance(obj, date) else None
 
 query_types = {
-    'area':     {'func': lambda **kwargs: area(**kwargs)    },
-    'count':    {'func': lambda **kwargs: count(**kwargs)   },
-    'weighted': {'func': lambda **kwargs: weighted(**kwargs)}
+    'area':     {'func': lambda **kwargs: area(**kwargs)     },
+    'count':    {'func': lambda **kwargs: count(**kwargs)    },
+    'weighted': {'func': lambda **kwargs: weighted(**kwargs) },
+    'dist':     {'func': lambda **kwargs: dist(**kwargs)     }
 }
 
 def crossdomain(origin=None, methods=None, headers=None,
@@ -217,6 +218,32 @@ def make_csv(data):
     writer = csv.writer(outp)
     writer.writerows(data)
     return outp.getvalue()
+            
+def contour_intersect(query_geom=None, contour_table_name='sf_shore',
+    buffer_radius=0):
+    """
+    Using a table containing a shape representing the general area under
+    consideration (e.g. a city, a state, etc) return its intersection with the
+    geometry query (if provided.)
+    """
+    # Retrieve the shore contours to consider land only
+    land_table = Table(contour_table_name, Base.metadata,
+        autoload=True, autoload_with=engine)
+    # If a query geometry is provided, compute its intersection
+    # with the shore contours; otherwise, just use the land
+    # contours
+    if query_geom:
+        hot_geom = func.ST_Intersection(
+            func.ST_GeomFromGeoJSON(query_geom),
+            func.ST_buffer(land_table.c['geom'], buffer_radius)
+        )
+    else:
+        hot_geom = land_table.c['geom']
+    land_val = session.query(func.ST_AsGeoJSON(hot_geom)).first()[0]
+    land_val = json.loads(land_val)
+    land_val['crs'] = {"type":"name","properties":{"name":"EPSG:4326"}}
+    land_geom = json.dumps(land_val)
+    return land_geom
 
 @api.route('/api/indicators/types/<query_type>/')
 @crossdomain(origin='*')
@@ -372,6 +399,106 @@ def count():
                     'human_name': human_name,
                     'query_type': 'count',
                     'value': v[0]
+                }
+                resp['objects'].append(d)
+        else:
+            resp['meta']['status'] = 'error'
+            resp['meta']['message'] = 'Invalid query.'
+            resp['objects'] = []
+            break
+    return resp, status_code
+
+def dist():
+    """
+    This type of queries "discretizes" the geometry into census blocks, and
+    computes the average (or weighted) distance to the closest point of
+    interest in the dataset.
+    """
+    raw_query_params = request.args.copy()
+    dataset_name = None
+    query_geom = None
+    if 'dataset_name' in raw_query_params.keys():
+        dataset_name = raw_query_params['dataset_name']
+        del raw_query_params['dataset_name']
+    if 'location_geom__within' in raw_query_params.keys():
+        raw_query_params['centroid__within'] = raw_query_params['location_geom__within']
+        del raw_query_params['location_geom__within']
+        val = json.loads(raw_query_params['centroid__within'])['geometry']
+        val['crs'] = {"type":"name", "properties":{"name":"EPSG:4326"}}
+        query_geom = json.dumps(val)
+    del raw_query_params['obs_date__ge']
+    del raw_query_params['obs_date__le']
+    del raw_query_params['agg']
+    # Pull data from meta_table
+    meta_table = Table('sf_meta', Base.metadata, autoload=True,
+        autoload_with=engine)
+    meta_query = session.query(
+        meta_table.c['table_name'],
+        meta_table.c['human_name'],
+        meta_table.c['voronoi']
+    ).filter('dist_q')
+    if dataset_name:
+        meta_query = meta_query.filter(meta_table.c['table_name'] == dataset_name)
+    datasets = meta_query.all()
+    # Retrieve the census tracts inside the considered area (whose
+    # centroids are inside the considered area)
+    land_geom = contour_intersect(query_geom, buffer_radius=0.0001)
+    raw_query_params['centroid__within'] = land_geom
+    census_table = Table('sf_census_blocks', Base.metadata,
+        autoload=True, autoload_with=engine)
+    blocks = session.query(
+        func.ST_AsEWKT(census_table.c['centroid']),
+        census_table.c['pop10'])\
+        .filter(census_table.c['centroid'].ST_Within(func.ST_GeomFromGeoJSON(land_geom))).all()
+    resp = {
+        'meta': {
+            'status': 'ok',
+            'message': '',
+        },
+        'objects': [],
+    }
+    status_code = 200
+    for dataset in datasets:
+        table_name = dataset[0]
+        human_name = dataset[1]
+        voronoi = dataset[2]
+        table = Table(table_name, Base.metadata,
+            autoload=True, autoload_with=engine)
+        valid_query, query_clauses, resp, status_code =\
+            make_query(census_table, raw_query_params, resp)
+        if valid_query:
+            if voronoi: 
+                base_query = session.query(
+                    func.avg(
+                        func.ST_Distance_Sphere(census_table.c['centroid'],
+                                                table.c['geom'])
+                    )
+                ).select_from(census_table)\
+                    .join(table, func.ST_Within(census_table.c['centroid'], table.c['voronoi']))
+                for clause in query_clauses:
+                    base_query = base_query.filter(clause)
+            else:
+                nested_query = session.query(
+                    func.min(
+                        func.ST_Distance_Sphere(census_table.c['centroid'],
+                                                table.c['geom'])
+                    ).label('min_dist'),
+                    census_table.c['pop10'].label('pop')
+                )
+                for clause in query_clauses:
+                    nested_query = nested_query.filter(clause)
+                nested_query = nested_query.group_by(census_table.c['row_id']).subquery()
+                base_query = session.query(func.avg(nested_query.c['min_dist']))
+            #for clause in query_clauses:
+            #    base_query = base_query.filter(clause)
+            print base_query
+            values = [v for v in base_query.all()]
+            for v in values:
+                d = {
+                    'dataset_name': table_name,
+                    'human_name': human_name,
+                    'query_type': 'dist',
+                    'value': round(v[0] if v[0] else 0.0, 4)
                 }
                 resp['objects'].append(d)
         else:

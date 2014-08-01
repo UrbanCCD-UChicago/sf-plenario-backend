@@ -74,6 +74,7 @@ def sf_meta_table(metadata):
             Column( 'dist_q',       Boolean                     ),
             Column( 'temp_q',       Boolean                     ),
             Column( 'weighted_q',   Boolean                     ),
+            Column( 'voronoi',      Boolean                     ),
     extend_existing=True)
     return table
 

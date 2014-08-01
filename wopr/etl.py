@@ -144,19 +144,25 @@ def import_shapefile(fpath, name, force_multipoly=False, proj=4326,
             pts = [p['geometry']['coordinates'] for p in shp.values()]
             pts = transform_proj(pts, proj, 4326)
             pts_map = dict([[str(i), p] for (i, p) in zip(range(len(pts)), pts)])
-            print len(pts_map)
-            vor_polygons = VoronoiGeoJson_Polygons(pts_map, BoundingBox=sf_bbox)
+            vor_polygons = VoronoiGeoJson_Polygons(pts_map, BoundingBox='W')
             vor_polygons = json.loads(vor_polygons)
-            vor_polygons = sorted(vor_polygons,
-                key=lambda r: int(r['properties']['_domain_id']))
+            # For matching the polygons to the correct point, we create a
+            # dictionary with _domain_id as keys
+            vor_polygons_dict = dict(zip(range(len(pts)),\
+                ['POLYGON EMPTY']*len(pts)))
+            for r in vor_polygons:
+                vor_polygons_dict[int(r['properties']['_domain_id'])] =\
+                    shape(r['geometry']).wkt
+            #vor_polygons = sorted(vor_polygons,
+            #    key=lambda r: int(r['properties']['_domain_id']))
             shp_table.append_column(Column('voronoi', Geometry('POLYGON',
                                     srid=4326)))
-            vor_p={}
-            vor_p['features'] = vor_polygons
-            vor_p['type'] = 'FeatureCollection'
-            with open('data/voronoi.json', 'w') as outfile:
-                outfile.write(json.dumps(vor_p))
-            print len(vor_polygons)
+            #vor_p={}
+            #vor_p['features'] = vor_polygons
+            #vor_p['type'] = 'FeatureCollection'
+            #with open('data/voronoi.json', 'w') as outfile:
+            #    outfile.write(json.dumps(vor_p))
+            #print len(vor_polygons)
         shp_table.create(bind=engine)
         features = []
         count = 0
@@ -184,8 +190,8 @@ def import_shapefile(fpath, name, force_multipoly=False, proj=4326,
                 row_dict['centroid'] =\
                     'SRID=4326;{0}'.format(geom.centroid.wkt)
             if shp.schema['geometry'].lower() == 'point' and voronoi:
-                vor_poly = shape(vor_polygons[count]['geometry'])
-                row_dict['voronoi'] = 'SRID=4326;{0}'.format(vor_poly.wkt)
+                row_dict['voronoi'] =\
+                    'SRID=4326;{0}'.format(vor_polygons_dict[count])
             features.append(row_dict)
             count += 1
             #if count > 100: break
@@ -200,7 +206,7 @@ def import_shapefile(fpath, name, force_multipoly=False, proj=4326,
                     print e.orig
                     return "Failed."
                 features = []
-                print count
+                print "Inserted {0} shapes in dataset {1}".format(count, name)
     return 'Table {0} created from shapefile'.format(name)
 
 def create_meta_table():
@@ -213,7 +219,7 @@ def create_meta_table():
 
 def add_dataset_meta(name, file_name='', human_name='', description='',
     val_attr='', count_q=False, area_q=False, dist_q=False,
-    temp_q=False, weighted_q=False):
+    temp_q=False, weighted_q=False, voronoi=False):
     """ Add infotmation about a dataset in the meta table """
     if human_name == '':
         human_name = name
@@ -223,7 +229,7 @@ def add_dataset_meta(name, file_name='', human_name='', description='',
         'human_name': human_name,'description': description,
         'last_update': func.current_timestamp(), 'val_attr': val_attr,
         'count_q': count_q, 'area_q': area_q, 'dist_q': dist_q,
-        'temp_q': temp_q, 'weighted_q': weighted_q}
+        'temp_q': temp_q, 'weighted_q': weighted_q, 'voronoi': voronoi}
     ins = meta_table.insert(row)
     conn = engine.contextual_connect()
     conn.execute(ins)
