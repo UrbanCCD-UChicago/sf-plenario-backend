@@ -442,14 +442,11 @@ def dist():
     datasets = meta_query.all()
     # Retrieve the census tracts inside the considered area (whose
     # centroids are inside the considered area)
+    # A buffer is added to consider centroids that may be in the water
     land_geom = contour_intersect(query_geom, buffer_radius=0.0001)
     raw_query_params['centroid__within'] = land_geom
     census_table = Table('sf_census_blocks', Base.metadata,
         autoload=True, autoload_with=engine)
-    blocks = session.query(
-        func.ST_AsEWKT(census_table.c['centroid']),
-        census_table.c['pop10'])\
-        .filter(census_table.c['centroid'].ST_Within(func.ST_GeomFromGeoJSON(land_geom))).all()
     resp = {
         'meta': {
             'status': 'ok',
@@ -467,16 +464,21 @@ def dist():
         valid_query, query_clauses, resp, status_code =\
             make_query(census_table, raw_query_params, resp)
         if valid_query:
+            # If a Voronoi diagram has be pre-computed for the dataset, use it
+            # to compute the minimum distances of every block more efficiently.
+            # Note, the results obtained from the Voronoi diagram might be
+            # slightly different than the ones obtained from computing the min
+            # distances online, since the computation of the Voronoi diagram
+            # doesn't take into account the projection and treats long/lat as
+            # if on a flat plane.
             if voronoi: 
-                base_query = session.query(
-                    func.avg(
-                        func.ST_Distance_Sphere(census_table.c['centroid'],
-                                                table.c['geom'])
-                    )
+                nested_query = session.query(
+                    func.ST_Distance_Sphere(census_table.c['centroid'],
+                                            table.c['geom']).label('min_dist'),
+                    census_table.c['pop10'].label('pop')
                 ).select_from(census_table)\
-                    .join(table, func.ST_Within(census_table.c['centroid'], table.c['voronoi']))
-                for clause in query_clauses:
-                    base_query = base_query.filter(clause)
+                    .join(table, func.ST_Within(census_table.c['centroid'],
+                        table.c['voronoi']))
             else:
                 nested_query = session.query(
                     func.min(
@@ -484,14 +486,16 @@ def dist():
                                                 table.c['geom'])
                     ).label('min_dist'),
                     census_table.c['pop10'].label('pop')
-                )
-                for clause in query_clauses:
-                    nested_query = nested_query.filter(clause)
-                nested_query = nested_query.group_by(census_table.c['row_id']).subquery()
-                base_query = session.query(func.avg(nested_query.c['min_dist']))
-            #for clause in query_clauses:
-            #    base_query = base_query.filter(clause)
-            print base_query
+                ).group_by(census_table.c['row_id'])
+            for clause in query_clauses:
+                nested_query = nested_query.filter(clause)
+            nested_query = nested_query.subquery()
+            # Compute the weighted average (by block population)
+            print nested_query.columns
+            base_query = session.query(
+                func.sum(nested_query.c['min_dist'] * nested_query.c['pop']) /\
+                    func.sum(nested_query.c['pop'])
+            )
             values = [v for v in base_query.all()]
             for v in values:
                 d = {
