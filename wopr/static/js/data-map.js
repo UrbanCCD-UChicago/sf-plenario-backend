@@ -59,7 +59,7 @@
             var name = this.model['objects']['dataset_name'];
             var agg = this.model.query.agg;
             var iteration = this.model.iteration;
-            ChartHelper.create(el, name, 'City of Chicago', agg, data, iteration);
+            ChartHelper.create(el, name, 'SFPD', agg, data, iteration);
         },
         fetchDownload: function(e){
             this.model.query['dataset_name'] = $(e.target).attr('id').split('-')[0];

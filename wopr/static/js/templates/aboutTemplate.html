@@ -1,10 +1,32 @@
 <h3>About</h3>
-<p>This is a prototype for demonstrating geospatial and time aggregation across multiple Chicago open datasets.</p>
+<p>This is a prototype for demonstrating geospatial and time aggregation across
+multiple San Francisco datasets.</p>
 
-<h4>Datasets available</h4>
+<br /><br />
 
-<ul>
+<h3>Datasets available</h3>
+
+<table class="table table-striped">
     <% $.each(datasets, function(i, set){ %>
-        <li><%= set.human_name %></li>
+        <tr>
+            <td><%= set.human_name %></td>
+            <td class="text-right">
+                <% if( set.area_q ) { %>
+                    <span class="label label-default"><small>area</small></span>
+                <% } %>
+                <% if( set.dist_q ) { %>
+                    <span class="label label-default"><small>distance</small></span>
+                <% } %>
+                <% if( set.weighted_q ) { %>
+                    <span class="label label-default"><small>weighted</small></span>
+                <% } %>
+                <% if( set.count_q ) { %>
+                    <span class="label label-default"><small>count</small></span>
+                <% } %>
+                <% if( set.temp_q ) { %>
+                    <span class="label label-default"><small>time-series</small></span>
+                <% } %>
+            </td>
+        </tr>
     <% }) %>
-</ul>
+</table>
