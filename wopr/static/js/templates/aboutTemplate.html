@@ -7,10 +7,26 @@ multiple San Francisco datasets.</p>
 <h3>Datasets available</h3>
 
 <table class="table table-striped">
+    <thead>
+        <th>Name</th>
+        <th>Time duration</th>
+        <th>Available queries</th>
+    </thead>
+    <tbody>
     <% $.each(datasets, function(i, set){ %>
         <tr>
-            <td><%= set.human_name %></td>
-            <td class="text-right">
+            <td>
+                <%= set.human_name %>
+                <% if( set.demo ) { %>
+                    &nbsp;&nbsp;<span class="label label-warning"<small>demo</small></span>
+                <% } %>
+            </td>
+            <td>
+                <span class="label label-primary">
+                    <small><%= set.duration %></small>
+                </span>
+            </td>
+            <td>
                 <% if( set.area_q ) { %>
                     <span class="label label-default"><small>area</small></span>
                 <% } %>
@@ -29,4 +45,5 @@ multiple San Francisco datasets.</p>
             </td>
         </tr>
     <% }) %>
+    </tbody>
 </table>

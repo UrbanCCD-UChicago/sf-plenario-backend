@@ -325,8 +325,13 @@ def area(land_only=True):
                                                 table.c['geom'])
             else:
                 hot_geom = table.c['geom']
+            #base_query = session.query(
+            #    func.sum(func.ST_Area(hot_geom)) /\
+            #        func.ST_Area(func.ST_GeomFromGeoJSON(land_geom))
+            #)
             base_query = session.query(
-                func.sum(func.ST_Area(hot_geom)) /\
+                table.c['start_date'], table.c['end_date'],
+                func.ST_Area(hot_geom) /\
                     func.ST_Area(func.ST_GeomFromGeoJSON(land_geom))
             )
             # Applying this filtering makes the query compute the actual
@@ -334,14 +339,40 @@ def area(land_only=True):
             for clause in query_clauses:
                 base_query = base_query.filter(clause)
             values = [v for v in base_query.all()]
+            changelog = {}
+            from_date = datetime(2000, 1, 1)
+            to_date = datetime.now()
+            # Create start and end changelog entries
+            changelog[str(from_date.date())] = 0.0
+            changelog[str(to_date.date())] = 0.0
             for v in values:
-                d = {
-                    'dataset_name': table_name, 
-                    'human_name': human_name,
-                    'query_type': 'area',
-                    'value': round(v[0] if v[0] else 0.0, 4)
-                }
-                resp['objects'].append(d)
+                start = v[0] if v[0] > from_date else from_date
+                end = v[1]
+                changelog[str(start.date())] =\
+                    changelog.get(str(start.date()), 0.0) + v[2]
+                if end <= to_date:
+                    changelog[str(end.date())] =\
+                        changelog.get(str(end.date()), 0.0) - v[2]
+            changelog = OrderedDict(sorted(changelog.items()))
+            cum_value = 0.0
+            for k in changelog:
+                cum_value = cum_value + changelog[k]
+                changelog[k] = cum_value
+                print k, changelog[k]
+            d = {
+                'dataset_name': table_name, 
+                'human_name': human_name,
+                'query_type': 'area',
+                'response_type': 'time-series',
+            }
+            return_values = []
+            for k in changelog:
+                return_values.append({
+                    'date': datetime.strptime(k, '%Y-%m-%d'),
+                    'value': round(changelog[k], 4)
+                })
+            d['values'] = return_values
+            resp['objects'].append(d)
         else:
             resp['meta']['status'] = 'error'
             resp['meta']['message'] = 'Invalid query.'
