@@ -259,9 +259,19 @@ def area(land_only=True):
     if 'dataset_name' in raw_query_params.keys():
         dataset_name = raw_query_params['dataset_name']
         del raw_query_params['dataset_name']
-    del raw_query_params['obs_date__ge']
-    del raw_query_params['obs_date__le']
-    del raw_query_params['agg']
+    if 'obs_date__ge' in raw_query_params.keys():
+        raw_query_params['end_date__ge'] = raw_query_params['obs_date__ge']
+        del raw_query_params['obs_date__ge']
+        from_date = datetime.strptime(raw_query_params['end_date__ge'], '%Y/%m/%d')
+    if 'obs_date__le' in raw_query_params.keys():
+        raw_query_params['start_date__le'] = raw_query_params['obs_date__le']
+        del raw_query_params['obs_date__le']
+        to_date = datetime.strptime(raw_query_params['start_date__le'], '%Y/%m/%d')
+    if 'agg' in raw_query_params.keys():
+        agg = raw_query_params['agg']
+        del raw_query_params['agg']
+    else:
+        agg = 'day'
     if 'location_geom__within' in raw_query_params.keys():
         raw_query_params['geom__intersects'] = raw_query_params['location_geom__within']
         del raw_query_params['location_geom__within']
@@ -329,8 +339,10 @@ def area(land_only=True):
             #    func.sum(func.ST_Area(hot_geom)) /\
             #        func.ST_Area(func.ST_GeomFromGeoJSON(land_geom))
             #)
+            table_start_dates = func.date_trunc(agg, table.c['start_date'])
+            table_end_dates = func.date_trunc(agg, table.c['end_date'])
             base_query = session.query(
-                table.c['start_date'], table.c['end_date'],
+                table_start_dates, table_end_dates,
                 func.ST_Area(hot_geom) /\
                     func.ST_Area(func.ST_GeomFromGeoJSON(land_geom))
             )
@@ -340,8 +352,10 @@ def area(land_only=True):
                 base_query = base_query.filter(clause)
             values = [v for v in base_query.all()]
             changelog = {}
-            from_date = datetime(2000, 1, 1)
-            to_date = datetime.now()
+            if not from_date:
+                from_date = datetime(2000, 1, 1)
+            if not to_date:
+                to_date = datetime.now()
             # Create start and end changelog entries
             changelog[str(from_date.date())] = 0.0
             changelog[str(to_date.date())] = 0.0
