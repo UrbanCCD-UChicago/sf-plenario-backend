@@ -1,19 +1,20 @@
-var ChartHelper = {};
-ChartHelper.create = function(el, title, source, time_agg, data, iteration) {
+var TableChartHelper = {};
+TableChartHelper.create = function(data, properties) {
   
   return new Highcharts.Chart({
       chart: {
-          renderTo: el + "_" + iteration,
+          renderTo: 'chart_' + properties.name + '_' + properties.type,
           type: 'line'
       },
       title: {
-          text: title
+          text: ''
       },
       legend: {
         enabled: false
       },
       subtitle: {
-          text: 'Source: ' + source
+        //text: 'Source: ' + source
+        enabled: false
       },
       xAxis: {
           title: {
@@ -23,13 +24,13 @@ ChartHelper.create = function(el, title, source, time_agg, data, iteration) {
       },
       yAxis: {
           title: {
-              text: 'Count'
+              text: 'Value'
           }
       },
       tooltip: {
           formatter: function() {
-              return '<b>'+ this.series.name +'</b><br/>'+
-                  ChartHelper.toolTipDateFormat(time_agg, this.x) +': '+ this.y;
+              return '<b>' +
+                  TableChartHelper.toolTipDateFormat(properties.time_agg, this.x) +': '+ this.y;
           }
       },
       plotOptions: {
@@ -52,14 +53,15 @@ ChartHelper.create = function(el, title, source, time_agg, data, iteration) {
           }
       },
       series: [{
-          color: ChartHelper.colors[iteration],
-          name: title,
+          color: TableChartHelper.colors[properties.iteration],
+          step: true,
+          name: properties.name,
           data: data
       }]
   });
 }
 
-ChartHelper.toolTipDateFormat = function(interval, x) {
+TableChartHelper.toolTipDateFormat = function(interval, x) {
   if (interval == "year" || interval == "decade")
     return Highcharts.dateFormat("%Y", x);
   if (interval == "quarter")
@@ -76,4 +78,4 @@ ChartHelper.toolTipDateFormat = function(interval, x) {
     return 1;
 }
 
-ChartHelper.colors = ["#A6761D", "#7570B3", "#D95F02", "#66A61E", "#E7298A", "#E6AB02", "#1B9E77"];
+TableChartHelper.colors = ["#A6761D", "#7570B3", "#D95F02", "#66A61E", "#E7298A", "#E6AB02", "#1B9E77"];

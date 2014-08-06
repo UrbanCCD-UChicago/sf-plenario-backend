@@ -59,7 +59,7 @@
             var name = this.model['objects']['dataset_name'];
             var agg = this.model.query.agg;
             var iteration = this.model.iteration;
-            ChartHelper.create(el, name, 'SFPD', agg, data, iteration);
+            TableChartHelper.create(el, name, 'SFPD', agg, data, iteration);
         },
         fetchDownload: function(e){
             this.model.query['dataset_name'] = $(e.target).attr('id').split('-')[0];
@@ -271,6 +271,25 @@
                     self.$el.spin(false);
                     self.$el.html(template_cache('areaResultsTemplate',
                         {resp:resp}));
+                    // Generate the plots, if object is a time-series
+                    $.each(resp.objects, function(i, obj){
+                        if(obj.response_type == 'time-series') {
+                            // Prepare the data
+                            var chart_data = [];
+                            $.each(obj.values, function(j, v){
+                                chart_data.push([moment(v.date).unix()*1000, v.value]);
+                            })
+                            // Create the chart object
+                            var chart_properties = {
+                                name: obj.dataset_name,
+                                source: '',
+                                time_agg: 'day',
+                                iteration: i,
+                                type: obj.query_type
+                            }
+                            TableChartHelper.create(chart_data, chart_properties);
+                        }
+                    });
                 }
             )
             return this;
@@ -345,7 +364,7 @@
             this.map.on('draw:drawstart', this.drawDelete);
             this.map.on('draw:edited', this.drawEdit);
             this.map.on('draw:deleted', this.drawDelete);
-            $('.date-filter').datepicker({
+            $('.dmeate-filter').datepicker({
                 dayNamesMin: ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'],
                 prevText: '',
                 nextText: ''

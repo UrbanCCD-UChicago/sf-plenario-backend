@@ -14,9 +14,9 @@
             <td>
                 <% if (obj.response_type == 'single-value') {  %>
                     <%= obj.value %>
-                <% ;} else { %>
+                <% } else { %>
                     <%= obj.values[obj.values.length-1].value %>
-                <% ;} %>
+                <% } %>
             </td>
             <td>
                 <% if (obj.response_type == 'time-series') {  %>
@@ -29,8 +29,9 @@
         <% if (obj.response_type == 'time-series') { %>
             <tr>
                 <td colspan="4" class="hidden-row">
-                    <div id=<%= "collapse_" + obj.dataset_name %>
-                    class="accordion-body collapse">CHART GOES HERE</div>
+                    <div id=<%= 'collapse_' + obj.dataset_name %> class="accordion-body collapse">
+                        <div id=<%= 'chart_' + obj.dataset_name + '_' + obj.query_type %> class="chart"></div>
+                    </div>
                 </td>
             </tr>
         <% } %>
