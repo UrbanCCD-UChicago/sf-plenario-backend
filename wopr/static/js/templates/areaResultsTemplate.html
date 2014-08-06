@@ -19,7 +19,9 @@
                 <% } %>
             </td>
             <td>
-                <% if (obj.response_type == 'time-series') {  %>
+                <% if (obj.response_type == 'time-series' &&
+                       (obj.values.length > 2 ||
+                        obj.values[0] == obj.values[1])) {  %>
                     <a data-toggle="collapse" data-parent="#accordion"
                     href=<%= "#collapse_" + obj.dataset_name %> >See plot</a>
                 <% } %>

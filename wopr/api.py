@@ -4,6 +4,8 @@ from functools import update_wrapper
 import os
 import math
 from datetime import date, datetime, timedelta
+from datetime_truncate import truncate
+import calendar
 import time
 import json
 from sqlalchemy import func, case, distinct, Column, Float, Table
@@ -35,6 +37,16 @@ query_types = {
     'weighted': {'func': lambda **kwargs: weighted(**kwargs) },
     'dist':     {'func': lambda **kwargs: dist(**kwargs)     }
 }
+
+def increment_datetime(sourcedate, time_agg):
+    if time_agg == 'day':
+        days_to_add = 1
+    elif time_agg == 'month':
+        _, days_to_add = calendar.monthrange(sourcedate.year, sourcedate.month)
+    elif time_agg == 'year':
+        days_to_add = 366 if calendar.isleap(sourcedate.year) else 365
+    return sourcedate + timedelta(days=days_to_add)
+
 
 def crossdomain(origin=None, methods=None, headers=None,
                 max_age=21600, attach_to_all=True,
@@ -351,10 +363,10 @@ def area(land_only=True):
             #    func.sum(func.ST_Area(hot_geom)) /\
             #        func.ST_Area(func.ST_GeomFromGeoJSON(land_geom))
             #)
-            table_start_dates = func.date_trunc(agg, table.c['start_date'])
-            table_end_dates = func.date_trunc(agg, table.c['end_date'])
+            table_start_date = func.date_trunc(agg, table.c['start_date'])
+            table_end_date = func.date_trunc(agg, table.c['end_date'])
             base_query = session.query(
-                table_start_dates, table_end_dates,
+                table_start_date, table_end_date,
                 func.ST_Area(hot_geom) /\
                     func.ST_Area(func.ST_GeomFromGeoJSON(land_geom))
             )
@@ -363,38 +375,39 @@ def area(land_only=True):
             for clause in query_clauses:
                 base_query = base_query.filter(clause)
             values = [v for v in base_query.all()]
-            changelog = {}
+            log = {}
             if not from_date:
                 from_date = datetime(2000, 1, 1)
             if not to_date:
                 to_date = datetime.now()
-            # Create start and end changelog entries
-            changelog[str(from_date.date())] = 0.0
-            changelog[str(to_date.date())] = 0.0
+            # Create start and end log entries
+            log[str(from_date.date())] = 0.0
+            log[str(to_date.date())] = 0.0
             for v in values:
                 start = v[0] if v[0] > from_date else from_date
                 end = v[1]
-                changelog[str(start.date())] =\
-                    changelog.get(str(start.date()), 0.0) + v[2]
+                log[str(start.date())] =\
+                    log.get(str(start.date()), 0.0) + v[2]
                 if end <= to_date:
-                    changelog[str(end.date())] =\
-                        changelog.get(str(end.date()), 0.0) - v[2]
-            changelog = OrderedDict(sorted(changelog.items()))
+                    log[str(end.date())] =\
+                        log.get(str(end.date()), 0.0) - v[2]
+            log = OrderedDict(sorted(log.items()))
             cum_value = 0.0
-            for k in changelog:
-                cum_value = cum_value + changelog[k]
-                changelog[k] = cum_value
+            for k in log:
+                cum_value = cum_value + log[k]
+                log[k] = cum_value
             d = {
                 'dataset_name': table_name, 
                 'human_name': human_name,
                 'query_type': 'area',
                 'response_type': 'time-series',
+                'time_agg': agg
             }
             return_values = []
-            for k in changelog:
+            for k in log:
                 return_values.append({
                     'date': datetime.strptime(k, '%Y-%m-%d'),
-                    'value': round(changelog[k], 4)
+                    'value': round(log[k], 4)
                 })
             d['values'] = return_values
             resp['objects'].append(d)
@@ -414,15 +427,28 @@ def count():
     if 'location_geom__within' in raw_query_params.keys():
         raw_query_params['geom__within'] = raw_query_params['location_geom__within']
         del raw_query_params['location_geom__within']
-    del raw_query_params['obs_date__ge']
-    del raw_query_params['obs_date__le']
-    del raw_query_params['agg']
+    if 'agg' in raw_query_params.keys():
+        agg = raw_query_params['agg']
+        del raw_query_params['agg']
+    else:
+        agg = 'day'
+    if 'obs_date__ge' in raw_query_params.keys():
+        from_date = datetime.strptime(raw_query_params['obs_date__ge'], '%Y/%m/%d')
+    else:
+        from_date = datetime(2000, 01, 01)
+    from_date = truncate(from_date, agg)
+    if 'obs_date__le' in raw_query_params.keys():
+        to_date = datetime.strptime(raw_query_params['obs_date__le'], '%Y/%m/%d')
+    else:
+        to_date = datetime.now()
+    to_date = truncate(to_date, agg)
     # Pull data from meta_table
     meta_table = Table('sf_meta', Base.metadata, autoload=True,
         autoload_with=engine)
     meta_query = session.query(
         meta_table.c['table_name'],
-        meta_table.c['human_name']
+        meta_table.c['human_name'],
+        meta_table.c['duration']
     ).filter('count_q')
     if dataset_name:
         meta_query = meta_query.filter(meta_table.c['table_name'] == dataset_name)
@@ -438,26 +464,78 @@ def count():
     for dataset in datasets:
         table_name = dataset[0]
         human_name = dataset[1]
+        duration = dataset[2]
         table = Table(table_name, Base.metadata,
             autoload=True, autoload_with=engine)
+        if 'obs_date__ge' in raw_query_params.keys() and duration == 'interval':
+            raw_query_params['end_date__ge'] = raw_query_params['obs_date__ge']
+            del raw_query_params['obs_date__ge']
+        if 'obs_date__le' in raw_query_params.keys() and duration == 'interval':
+            raw_query_params['start_date__le'] = raw_query_params['obs_date__le']
+            del raw_query_params['obs_date__le']
         valid_query, query_clauses, resp, status_code =\
             make_query(table, raw_query_params, resp)
         if valid_query:
-            base_query = session.query(
-                func.count(table.c['row_id'])
-            )
-            for clause in query_clauses:
-                base_query = base_query.filter(clause)
-            values = [v for v in base_query.all()]
-            for v in values:
-                d = {
-                    'dataset_name': table_name,
-                    'human_name': human_name,
-                    'query_type': 'count',
-                    'response_type': 'single-value',
-                    'value': v[0]
-                }
-                resp['objects'].append(d)
+            if duration == 'interval':
+                table_start_date = func.date_trunc(agg, table.c['start_date'])
+                table_end_date = func.date_trunc(agg, table.c['end_date'])
+                base_query = session.query(
+                    table_start_date, table_end_date
+                )
+                for clause in query_clauses:
+                    base_query = base_query.filter(clause)
+                values = [v for v in base_query.all()]
+                log = {}
+                # Create start and end log entries
+                log[from_date] = 0
+                log[to_date] = 0
+                for v in values:
+                    start = v[0] if v[0] > from_date else from_date
+                    end = v[1]
+                    log[start] =\
+                        log.get(start, 0) + 1
+                    if end <= to_date:
+                        log[end] =\
+                            log.get(end, 0) - 1
+                log = OrderedDict(sorted(log.items()))
+                cum_value = 0
+                for k in log:
+                    cum_value = cum_value + log[k]
+                    log[k] = cum_value
+            else:
+                table_date = func.date_trunc(agg, table.c['obs_date'])
+                base_query = session.query(
+                    table_date,
+                    func.count(table.c['row_id'])
+                ).group_by(table_date).order_by(table_date)
+                values = [v for v in base_query.all()]
+                # Need to fill in the missing values with zeros                
+                filled_values = []
+                cursor = from_date
+                v_index = 0
+                while cursor <= to_date:
+                    if v_index < len(values) and values[v_index][0] == cursor:
+                        filled_values.append(values[v_index])
+                        v_index += 1
+                    else:
+                        filled_values.append((cursor, 0))
+                    cursor = increment_datetime(cursor, agg)
+                log = OrderedDict(filled_values)
+            d = {
+                'dataset_name': table_name,
+                'human_name': human_name,
+                'query_type': 'count',
+                'response_type': 'time-series',
+                'time_agg': agg
+            }
+            return_values = []
+            for k in log:
+                return_values.append({
+                    'date': k,
+                    'value': log[k]
+                })
+            d['values'] = return_values
+            resp['objects'].append(d)
         else:
             resp['meta']['status'] = 'error'
             resp['meta']['message'] = 'Invalid query.'

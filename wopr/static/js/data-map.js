@@ -283,7 +283,7 @@
                             var chart_properties = {
                                 name: obj.dataset_name,
                                 source: '',
-                                time_agg: 'day',
+                                time_agg: obj.time_agg,
                                 iteration: i,
                                 type: obj.query_type
                             }

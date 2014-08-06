@@ -29,8 +29,8 @@ TableChartHelper.create = function(data, properties) {
       },
       tooltip: {
           formatter: function() {
-              return '<b>' +
-                  TableChartHelper.toolTipDateFormat(properties.time_agg, this.x) +': '+ this.y;
+              return TableChartHelper.toolTipDateFormat(
+                  properties.time_agg, this.x) +': <b>'+ this.y + '</b>';
           }
       },
       plotOptions: {

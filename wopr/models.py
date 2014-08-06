@@ -70,6 +70,7 @@ def sf_meta_table(metadata):
             Column( 'last_update',  DateTime, default=datetime.now()     ),
             Column( 'val_attr',     String(length=30)           ),
             Column( 'duration',     String(length=10)           ),
+            Column( 'date_field',   String(length=30)         ), 
             Column( 'count_q',      Boolean                     ),
             Column( 'area_q',       Boolean                     ),
             Column( 'dist_q',       Boolean                     ),
