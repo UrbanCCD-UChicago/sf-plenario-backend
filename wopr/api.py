@@ -6,7 +6,7 @@ import math
 from datetime import date, datetime, timedelta
 import time
 import json
-from sqlalchemy import func, distinct, Column, Float, Table
+from sqlalchemy import func, case, distinct, Column, Float, Table
 from sqlalchemy.exc import NoSuchTableError
 from sqlalchemy.types import NullType
 from sqlalchemy.sql.expression import cast
@@ -22,6 +22,8 @@ from collections import OrderedDict
 
 from wopr.models import MasterTable, MetaTable
 from wopr.database import session, app_engine as engine, Base
+
+import time
 
 api = Blueprint('api', __name__)
 
@@ -330,9 +332,19 @@ def area(land_only=True):
                 # query_geom is used instead of land_geom to compute
                 # intersections since the geometries in the queried dataset are
                 # all on land, and query geom is usually a simpler geometry
-                # than land_geom
-                hot_geom = func.ST_Intersection(func.ST_GeomFromGeoJSON(query_geom),
-                                                table.c['geom'])
+                # than land_geom.
+                # In order to avoid cumputing unneccesary intersection, we
+                # check if a feature is entirely included in the query
+                # geometry using the SQL case statement.
+                hot_geom = case([(
+                        func.ST_Within(table.c['geom'],
+                                       func.ST_GeomFromGeoJSON(query_geom)),
+                        table.c['geom']
+                    )],
+                    else_=\
+                        func.ST_Intersection(func.ST_GeomFromGeoJSON(query_geom),
+                                             table.c['geom'])
+                )
             else:
                 hot_geom = table.c['geom']
             #base_query = session.query(
@@ -372,7 +384,6 @@ def area(land_only=True):
             for k in changelog:
                 cum_value = cum_value + changelog[k]
                 changelog[k] = cum_value
-                print k, changelog[k]
             d = {
                 'dataset_name': table_name, 
                 'human_name': human_name,
@@ -537,7 +548,6 @@ def dist():
                 nested_query = nested_query.filter(clause)
             nested_query = nested_query.subquery()
             # Compute the weighted average (by block population)
-            print nested_query.columns
             base_query = session.query(
                 func.sum(nested_query.c['min_dist'] * nested_query.c['pop']) /\
                     func.sum(nested_query.c['pop'])
@@ -689,10 +699,19 @@ def indicators():
         },
         'objects': [],
     }
+    timetot1 = time.time()
     for name, attr in query_types.items():
+        time1 = time.time()
         resp, status_code = attr['func']()
+        time2 = time.time()
+        print '{0}: {1}'.format(name, time2-time1)
+        time1 = time.time()
         for obj in resp['objects']:
             resp_all['objects'].append(obj)
+        time2 = time.time()
+        print '\tExtra: {0}'.format(time2-time1)
+    timetot2 = time.time()
+    print 'TOTAL: {0}'.format(timetot2-timetot1)
     resp_all['meta']['status'] = 'ok'
     resp_all = make_response(json.dumps(resp_all, default=dthandler), status_code)
     resp_all.headers['Content-Type'] = 'application/json'
