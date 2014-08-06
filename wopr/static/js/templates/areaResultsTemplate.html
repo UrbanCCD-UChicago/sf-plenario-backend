@@ -1,17 +1,39 @@
 <h3>Shapefiles indicators:</h3>
 
-<table class="table table-striped">
+<table class="table table-condensed">
     <thead>
         <th>Dataset</th>
         <th>Value</th>
+        <th></th>
+        <th>Type</th>
     </thead>
     <tbody>
     <% $.each(resp.objects, function(i, obj){ %>
         <tr>
             <td><%= obj.human_name %></td>
-            <td><%= obj.value %></td>
+            <td>
+                <% if (obj.response_type == 'single-value') {  %>
+                    <%= obj.value %>
+                <% ;} else { %>
+                    <%= obj.values[obj.values.length-1].value %>
+                <% ;} %>
+            </td>
+            <td>
+                <% if (obj.response_type == 'time-series') {  %>
+                    <a data-toggle="collapse" data-parent="#accordion"
+                    href=<%= "#collapse_" + obj.dataset_name %> >See plot</a>
+                <% } %>
+            </td>
             <td><small>(<%= obj.query_type %>)</small></td>
         </tr>
+        <% if (obj.response_type == 'time-series') { %>
+            <tr>
+                <td colspan="4" class="hidden-row">
+                    <div id=<%= "collapse_" + obj.dataset_name %>
+                    class="accordion-body collapse">CHART GOES HERE</div>
+                </td>
+            </tr>
+        <% } %>
     <% }) %>
     </tbody>
 </table>

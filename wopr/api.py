@@ -429,6 +429,7 @@ def count():
                     'dataset_name': table_name,
                     'human_name': human_name,
                     'query_type': 'count',
+                    'response_type': 'single-value',
                     'value': v[0]
                 }
                 resp['objects'].append(d)
@@ -533,6 +534,7 @@ def dist():
                     'dataset_name': table_name,
                     'human_name': human_name,
                     'query_type': 'dist',
+                    'response_type': 'single-value',
                     'value': round(v[0] if v[0] else 0.0, 4)
                 }
                 resp['objects'].append(d)
@@ -630,6 +632,7 @@ def weighted():
                     'dataset_name': table_name, 
                     'human_name': human_name,
                     'query_type': 'weighted',
+                    'response_type': 'single-value',
                     'value': round(v[0] if v[0] else 0.0, 4)
                 }
                 resp['objects'].append(d)
