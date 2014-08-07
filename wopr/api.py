@@ -41,6 +41,8 @@ query_types = {
 def increment_datetime(sourcedate, time_agg):
     if time_agg == 'day':
         days_to_add = 1
+    if time_agg == 'week':
+        days_to_add = 7
     elif time_agg == 'month':
         _, days_to_add = calendar.monthrange(sourcedate.year, sourcedate.month)
     elif time_agg == 'year':
@@ -467,14 +469,15 @@ def count():
         duration = dataset[2]
         table = Table(table_name, Base.metadata,
             autoload=True, autoload_with=engine)
-        if 'obs_date__ge' in raw_query_params.keys() and duration == 'interval':
-            raw_query_params['end_date__ge'] = raw_query_params['obs_date__ge']
-            del raw_query_params['obs_date__ge']
-        if 'obs_date__le' in raw_query_params.keys() and duration == 'interval':
-            raw_query_params['start_date__le'] = raw_query_params['obs_date__le']
-            del raw_query_params['obs_date__le']
+        local_params = raw_query_params.copy()
+        if 'obs_date__ge' in local_params.keys() and duration == 'interval':
+            local_params['end_date__ge'] = local_params['obs_date__ge']
+            del local_params['obs_date__ge']
+        if 'obs_date__le' in local_params.keys() and duration == 'interval':
+            local_params['start_date__le'] = local_params['obs_date__le']
+            del local_params['obs_date__le']
         valid_query, query_clauses, resp, status_code =\
-            make_query(table, raw_query_params, resp)
+            make_query(table, local_params, resp)
         if valid_query:
             if duration == 'interval':
                 table_start_date = func.date_trunc(agg, table.c['start_date'])
@@ -508,13 +511,22 @@ def count():
                     table_date,
                     func.count(table.c['row_id'])
                 ).group_by(table_date).order_by(table_date)
+                for clause in query_clauses:
+                    base_query = base_query.filter(clause)
+                for clause in query_clauses:
+                    base_query = base_query.filter(clause)
                 values = [v for v in base_query.all()]
                 # Need to fill in the missing values with zeros                
                 filled_values = []
                 cursor = from_date
                 v_index = 0
+                if len(values) > 0:
+                    while v_index < len(values) and\
+                            cursor > values[v_index][0].replace(tzinfo=None):
+                        v_index += 1
                 while cursor <= to_date:
-                    if v_index < len(values) and values[v_index][0] == cursor:
+                    if v_index < len(values) and\
+                        values[v_index][0].replace(tzinfo=None) == cursor:
                         filled_values.append(values[v_index])
                         v_index += 1
                     else:
@@ -606,7 +618,7 @@ def dist():
             # distances online, since the computation of the Voronoi diagram
             # doesn't take into account the projection and treats long/lat as
             # if on a flat plane.
-            if voronoi: 
+            if voronoi and False: 
                 nested_query = session.query(
                     func.ST_Distance_Sphere(census_table.c['centroid'],
                                             table.c['geom']).label('min_dist'),
