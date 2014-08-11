@@ -11,7 +11,9 @@ import json
 from sqlalchemy import func, case, distinct, Column, Float, Table
 from sqlalchemy.exc import NoSuchTableError
 from sqlalchemy.types import NullType
-from sqlalchemy.sql.expression import cast
+from sqlalchemy.sql.expression import cast,\
+        Executable, ClauseElement,_literal_as_text
+from sqlalchemy.ext.compiler import compiles
 from geoalchemy2 import Geometry
 from geoalchemy2.functions import ST_AsGeoJSON
 from operator import itemgetter
@@ -249,10 +251,20 @@ def contour_intersect(query_geom=None, contour_table_name='sf_shore',
     # with the shore contours; otherwise, just use the land
     # contours
     if query_geom:
-        hot_geom = func.ST_Intersection(
-            func.ST_GeomFromGeoJSON(query_geom),
-            func.ST_buffer(land_table.c['geom'], buffer_radius)
+        hot_geom = case([(
+                func.ST_Within(func.ST_GeomFromGeoJSON(query_geom),
+                        land_table.c['geom']),
+                func.ST_GeomFromGeoJSON(query_geom)
+            )],
+            else_=\
+                func.ST_Intersection(func.ST_GeomFromGeoJSON(query_geom),
+                                     land_table.c['geom'])
         )
+        #hot_geom = func.ST_Intersection(
+        #    func.ST_GeomFromGeoJSON(query_geom),
+        #    #func.ST_buffer(land_table.c['geom'], buffer_radius)
+        #    land_table.c['geom']
+        #)
     else:
         hot_geom = land_table.c['geom']
     land_val = session.query(func.ST_AsGeoJSON(hot_geom)).first()[0]
@@ -555,6 +567,19 @@ def count():
             break
     return resp, status_code
 
+class explain(Executable, ClauseElement):
+    def __init__(self, stmt, analyze=False):
+        self.statement = _literal_as_text(stmt)
+        self.analyze = analyze
+
+@compiles(explain, 'postgresql')
+def pg_explain(element, compiler, **kw):
+    text = "EXPLAIN "
+    if element.analyze:
+        text += "ANALYZE "
+    text += compiler.process(element.statement)
+    return text
+
 def dist():
     """
     This type of queries "discretizes" the geometry into census blocks, and
@@ -562,26 +587,40 @@ def dist():
     interest in the dataset.
     """
     raw_query_params = request.args.copy()
+    blocks_raw_query_params = {}
     dataset_name = None
     query_geom = None
     if 'dataset_name' in raw_query_params.keys():
         dataset_name = raw_query_params['dataset_name']
         del raw_query_params['dataset_name']
     if 'location_geom__within' in raw_query_params.keys():
-        raw_query_params['centroid__within'] = raw_query_params['location_geom__within']
+        blocks_raw_query_params['centroid__within'] = raw_query_params['location_geom__within']
         del raw_query_params['location_geom__within']
-        val = json.loads(raw_query_params['centroid__within'])['geometry']
+        val = json.loads(blocks_raw_query_params['centroid__within'])['geometry']
         val['crs'] = {"type":"name", "properties":{"name":"EPSG:4326"}}
         query_geom = json.dumps(val)
-    del raw_query_params['obs_date__ge']
-    del raw_query_params['obs_date__le']
-    del raw_query_params['agg']
+    if 'agg' in raw_query_params.keys():
+        agg = raw_query_params['agg']
+        del raw_query_params['agg']
+    else:
+        agg = 'day'
+    if 'obs_date__ge' in raw_query_params.keys():
+        from_date = datetime.strptime(raw_query_params['obs_date__ge'], '%Y/%m/%d')
+    else:
+        from_date = datetime(2000, 01, 01)
+    from_date = truncate(from_date, agg)
+    if 'obs_date__le' in raw_query_params.keys():
+        to_date = datetime.strptime(raw_query_params['obs_date__le'], '%Y/%m/%d')
+    else:
+        to_date = datetime.now()
+    to_date = truncate(to_date, agg)
     # Pull data from meta_table
     meta_table = Table('sf_meta', Base.metadata, autoload=True,
         autoload_with=engine)
     meta_query = session.query(
         meta_table.c['table_name'],
         meta_table.c['human_name'],
+        meta_table.c['duration'],
         meta_table.c['voronoi']
     ).filter('dist_q')
     if dataset_name:
@@ -590,9 +629,10 @@ def dist():
     # Retrieve the census tracts inside the considered area (whose
     # centroids are inside the considered area)
     # A buffer is added to consider centroids that may be in the water
-    land_geom = contour_intersect(query_geom, buffer_radius=0.0001)
-    raw_query_params['centroid__within'] = land_geom
-    census_table = Table('sf_census_blocks', Base.metadata,
+    land_geom = contour_intersect(query_geom, buffer_radius=0.0)
+    #land_geom = query_geom
+    blocks_raw_query_params['centroid__within'] = land_geom
+    blocks_table = Table('sf_census_blocks', Base.metadata,
         autoload=True, autoload_with=engine)
     resp = {
         'meta': {
@@ -605,11 +645,21 @@ def dist():
     for dataset in datasets:
         table_name = dataset[0]
         human_name = dataset[1]
-        voronoi = dataset[2]
+        duration = dataset[2]
+        voronoi = dataset[3]
         table = Table(table_name, Base.metadata,
             autoload=True, autoload_with=engine)
+        local_params = raw_query_params.copy()
+        if 'obs_date__ge' in local_params.keys() and duration == 'interval':
+            local_params['end_date__ge'] = local_params['obs_date__ge']
+            del local_params['obs_date__ge']
+        if 'obs_date__le' in local_params.keys() and duration == 'interval':
+            local_params['start_date__le'] = local_params['obs_date__le']
+            del local_params['obs_date__le']
         valid_query, query_clauses, resp, status_code =\
-            make_query(census_table, raw_query_params, resp)
+            make_query(table, local_params, resp)
+        valid_query, blocks_query_clauses, resp, status_code =\
+            make_query(blocks_table, blocks_raw_query_params, resp)
         if valid_query:
             # If a Voronoi diagram has be pre-computed for the dataset, use it
             # to compute the minimum distances of every block more efficiently.
@@ -620,21 +670,32 @@ def dist():
             # if on a flat plane.
             if voronoi and False: 
                 nested_query = session.query(
-                    func.ST_Distance_Sphere(census_table.c['centroid'],
+                    func.ST_Distance_Sphere(blocks_table.c['centroid'],
                                             table.c['geom']).label('min_dist'),
-                    census_table.c['pop10'].label('pop')
-                ).select_from(census_table)\
-                    .join(table, func.ST_Within(census_table.c['centroid'],
+                    blocks_table.c['pop10'].label('pop')
+                ).select_from(blocks_table)\
+                    .join(table, func.ST_Within(blocks_table.c['centroid'],
                         table.c['voronoi']))
             else:
+                points_query = session.query(func.ST_Collect(table.c['geom'])\
+                        .label('points')) 
+                for clause in query_clauses:
+                    points_query = points_query.filter(clause)
+                points_query = points_query.subquery()
+                test_query = session.query(
+                    func.ST_Distance_Sphere(points_query.c['points'],
+                                blocks_table.c['centroid']).label('min_dist'),
+                    blocks_table.c['pop10'].label('pop')
+                )
                 nested_query = session.query(
                     func.min(
-                        func.ST_Distance_Sphere(census_table.c['centroid'],
+                        func.ST_Distance_Sphere(blocks_table.c['centroid'],
                                                 table.c['geom'])
                     ).label('min_dist'),
-                    census_table.c['pop10'].label('pop')
-                ).group_by(census_table.c['row_id'])
-            for clause in query_clauses:
+                    blocks_table.c['pop10'].label('pop')
+                ).group_by(blocks_table.c['row_id'])
+                nested_query = test_query
+            for clause in blocks_query_clauses:
                 nested_query = nested_query.filter(clause)
             nested_query = nested_query.subquery()
             # Compute the weighted average (by block population)
@@ -642,6 +703,13 @@ def dist():
                 func.sum(nested_query.c['min_dist'] * nested_query.c['pop']) /\
                     func.sum(nested_query.c['pop'])
             )
+            explain_query = session.execute(explain(base_query, analyze=True))
+            explain_values = [v for v in explain_query.fetchall()]
+            
+            print '\nDIST_QUERY ({0}):'.format(human_name)
+            for v in explain_values:
+                print v[0]
+            print '\n\n'
             values = [v for v in base_query.all()]
             for v in values:
                 d = {
