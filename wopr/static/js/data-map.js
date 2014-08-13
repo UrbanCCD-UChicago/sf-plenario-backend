@@ -59,7 +59,7 @@
             var name = this.model['objects']['dataset_name'];
             var agg = this.model.query.agg;
             var iteration = this.model.iteration;
-            ChartHelper.create(el, name, 'SFPD', agg, data, iteration);
+            TableChartHelper.create(el, name, 'SFPD', agg, data, iteration);
         },
         fetchDownload: function(e){
             this.model.query['dataset_name'] = $(e.target).attr('id').split('-')[0];
@@ -189,7 +189,7 @@
             this.$el.spin('large');
             //if (!this.attributes.explore){
             this.getAreaResults();
-            this.getResults();
+            //this.getResults();
             //}
         },
         exploreDataset: function(e){
@@ -210,12 +210,42 @@
             router.navigate(route);
         },
         getAreaResults: function(){
-            var self = this;
-            var res = new AreaResultsView({
-                attributes: {query: this.query}
-            });
-            self.$el.append(res.render().el);
             $('#about').hide();
+            var self = this;
+            $.when(this.get_area_data()).then(function(resp){
+                self.$el.spin(false);
+                var res = new AreaResultsView({
+                    attributes: {resp:resp}
+                });
+                self.$el.append(res.render().el);
+                // Generate the plots, if object is a time-series
+                $.each(resp.objects, function(i, obj){
+                    if(obj.response_type == 'time-series') {
+                        // Prepare the data
+                        var chart_data = [];
+                        $.each(obj.values, function(j, v){
+                            chart_data.push([moment(v.date).unix()*1000, v.value]);
+                        })
+                        // Create the chart object
+                        var chart_properties = {
+                            name: obj.dataset_name,
+                            source: '',
+                            time_agg: obj.time_agg,
+                            iteration: i,
+                            type: obj.query_type
+                        }
+                        TableChartHelper.create(chart_data, chart_properties);
+                    }
+                });
+            });
+        },
+        get_area_data: function(){
+            var self = this;
+            return $.ajax({
+                url: '/api/indicators/',
+                datatype: 'json',
+                data: self.query
+            })
         },
         getResults: function(){
             var self = this;
@@ -259,29 +289,15 @@
 
     var AreaResultsView = Backbone.View.extend({
         initialize: function(){
-            this.query = this.attributes.query;
+            this.resp = this.attributes.resp;
             this.render();
         },
         render: function(){
             this.$el.empty();
-            this.$el.spin('large');
             var self = this;
-            $.when(this.get_area_data()).then(            
-                function(resp){
-                    self.$el.spin(false);
-                    self.$el.html(template_cache('areaResultsTemplate',
-                        {resp:resp}));
-                }
-            )
+            self.$el.html(template_cache('areaResultsTemplate',
+                {resp:self.resp}));
             return this;
-        },
-        get_area_data: function(){
-            var self = this;
-            return $.ajax({
-                url: '/api/indicators/',
-                datatype: 'json',
-                data: self.query
-            })
         }
     });
 
@@ -345,7 +361,7 @@
             this.map.on('draw:drawstart', this.drawDelete);
             this.map.on('draw:edited', this.drawEdit);
             this.map.on('draw:deleted', this.drawDelete);
-            $('.date-filter').datepicker({
+            $('.dmeate-filter').datepicker({
                 dayNamesMin: ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'],
                 prevText: '',
                 nextText: ''

@@ -1,12 +1,13 @@
 import os
-from datetime import datetime, timedelta
+import numpy as np
+from datetime import datetime
 from wopr.database import task_engine as engine, Base
 from wopr.models import crime_table, MasterTable, sf_crime_table,\
     sf_meta_table, shp2table
 from wopr.helpers import download_crime
 from datetime import datetime, date
 from sqlalchemy import Column, Integer, Table, func, select, Boolean,\
-    UniqueConstraint, text, and_, or_
+    DateTime, UniqueConstraint, text, and_, or_
 from sqlalchemy.dialects.postgresql import TIMESTAMP
 from sqlalchemy.exc import NoSuchTableError, SQLAlchemyError
 from geoalchemy2 import Geometry
@@ -120,7 +121,8 @@ def transform_proj(geom, source, target=4326):
         return list(res)
     
 def import_shapefile(fpath, name, force_multipoly=False, proj=4326,
-    voronoi=False):
+    voronoi=False, duration='interval', start_date=None, end_date=None,
+    obs_date_field='obs_date'):
     """Import a shapefile into the PostGIS database
 
     Keyword arguments:
@@ -128,6 +130,12 @@ def import_shapefile(fpath, name, force_multipoly=False, proj=4326,
     name -- name given to the newly created table
     force_multipoly -- enforce that the gemoetries are multipolygons
     proj -- source projection spec (EPSG code or Proj$ string)
+    voronoi -- compute voronoi triangulations of points
+    duration -- 'interval' or 'event'
+    start_date -- initial date of shapes life (works with duration = 'interval')
+    end_date -- final date of shapes life (works with duration = 'interval')
+    obs_date_field -- where to find event time info (works with duration =
+                      'event')
     """
     # Open the shapefile with fiona.
     with fiona.open('/', vfs='zip://{0}'.format(fpath)) as shp:
@@ -135,6 +143,14 @@ def import_shapefile(fpath, name, force_multipoly=False, proj=4326,
             force_multipoly=force_multipoly)
         shp_table.drop(bind=engine, checkfirst=True)
         shp_table.append_column(Column('row_id', Integer, primary_key=True))
+        if duration == 'interval':
+            shp_table.append_column(Column('start_date', DateTime,\
+                default=datetime.min))
+            shp_table.append_column(Column('end_date', DateTime,\
+                default=datetime.max))
+        else:
+            shp_table.append_column(Column('obs_date', DateTime,\
+                default=datetime.now()))
         # If the geometry is not "point", append a centroid column
         if shp.schema['geometry'].lower() != 'point':
             shp_table.append_column(Column('centroid', Geometry('POINT',
@@ -153,16 +169,8 @@ def import_shapefile(fpath, name, force_multipoly=False, proj=4326,
             for r in vor_polygons:
                 vor_polygons_dict[int(r['properties']['_domain_id'])] =\
                     shape(r['geometry']).wkt
-            #vor_polygons = sorted(vor_polygons,
-            #    key=lambda r: int(r['properties']['_domain_id']))
             shp_table.append_column(Column('voronoi', Geometry('POLYGON',
                                     srid=4326)))
-            #vor_p={}
-            #vor_p['features'] = vor_polygons
-            #vor_p['type'] = 'FeatureCollection'
-            #with open('data/voronoi.json', 'w') as outfile:
-            #    outfile.write(json.dumps(vor_p))
-            #print len(vor_polygons)
         shp_table.create(bind=engine)
         features = []
         count = 0
@@ -189,6 +197,127 @@ def import_shapefile(fpath, name, force_multipoly=False, proj=4326,
             if shp.schema['geometry'].lower() != 'point':
                 row_dict['centroid'] =\
                     'SRID=4326;{0}'.format(geom.centroid.wkt)
+            if duration == 'interval':
+                if start_date:
+                    row_dict['start_date'] = start_date
+                if end_date:
+                    row_dict['end_date'] = end_date
+            else:
+                row_dict['obs_date'] = row_dict[obs_date_field.lower()]
+                del row_dict[obs_date_field]
+            if shp.schema['geometry'].lower() == 'point' and voronoi:
+                row_dict['voronoi'] =\
+                    'SRID=4326;{0}'.format(vor_polygons_dict[count])
+            features.append(row_dict)
+            count += 1
+            #if count > 100: break
+            # Buffer DB writes
+            if not count % 1000 or count == num_shapes:
+                try:
+                    ins = shp_table.insert(features)
+                    conn = engine.contextual_connect()
+                    conn.execute(ins)
+                except SQLAlchemyError as e:
+                    print type(e)
+                    print e.orig
+                    return "Failed."
+                features = []
+                print "Inserted {0} shapes in dataset {1}".format(count, name)
+    return 'Table {0} created from shapefile'.format(name)
+
+""" TEMPORARY """
+def import_shapefile_timed(fpath, name, force_multipoly=False, proj=4326,
+    voronoi=False, duration='interval', start_date=None, end_date=None,
+    obs_date_field='obs_date'):
+    """Import a shapefile into the PostGIS database
+
+    Keyword arguments:
+    fpath -- path to a zipfile to be extracted
+    name -- name given to the newly created table
+    force_multipoly -- enforce that the gemoetries are multipolygons
+    proj -- source projection spec (EPSG code or Proj$ string)
+    voronoi -- compute voronoi triangulations of points
+    duration -- 'interval' or 'event'
+    start_date -- initial date of shapes life (works with duration = 'interval')
+    end_date -- final date of shapes life (works with duration = 'interval')
+    obs_date_field -- where to find event time info (works with duration =
+                      'event')
+    """
+    # Open the shapefile with fiona.
+    with fiona.open('/', vfs='zip://{0}'.format(fpath)) as shp:
+        shp_table = shp2table(name, Base.metadata, shp.schema,
+            force_multipoly=force_multipoly)
+        shp_table.drop(bind=engine, checkfirst=True)
+        shp_table.append_column(Column('row_id', Integer, primary_key=True))
+        if duration == 'interval':
+            shp_table.append_column(Column('start_date', DateTime,\
+                default=datetime.min))
+            shp_table.append_column(Column('end_date', DateTime,\
+                default=datetime.max))
+        else:
+            shp_table.append_column(Column('obs_date', DateTime,\
+                default=datetime.now()))
+        # If the geometry is not "point", append a centroid column
+        if shp.schema['geometry'].lower() != 'point':
+            shp_table.append_column(Column('centroid', Geometry('POINT',
+                                    srid=4326)))
+        # Add a column and compute Voronoi triangulation, if required
+        if shp.schema['geometry'].lower() == 'point' and voronoi:
+            pts = [p['geometry']['coordinates'] for p in shp.values()]
+            pts = transform_proj(pts, proj, 4326)
+            pts_map = dict([[str(i), p] for (i, p) in zip(range(len(pts)), pts)])
+            vor_polygons = VoronoiGeoJson_Polygons(pts_map, BoundingBox='W')
+            vor_polygons = json.loads(vor_polygons)
+            # For matching the polygons to the correct point, we create a
+            # dictionary with _domain_id as keys
+            vor_polygons_dict = dict(zip(range(len(pts)),\
+                ['POLYGON EMPTY']*len(pts)))
+            for r in vor_polygons:
+                vor_polygons_dict[int(r['properties']['_domain_id'])] =\
+                    shape(r['geometry']).wkt
+            shp_table.append_column(Column('voronoi', Geometry('POLYGON',
+                                    srid=4326)))
+        shp_table.create(bind=engine)
+        features = []
+        count = 0
+        num_shapes = len(shp)
+        for r in shp:
+            # ESRI shapefile don't contemplate multipolygons, i.e. the geometry
+            # type is polygon even if multipolygons are contained.
+            # If and when the 1st multipoly is encountered, the table is
+            # re-initialized.
+            if not force_multipoly and r['geometry']['type'] == 'MultiPolygon':
+                return import_shapefile_timed(fpath, name, force_multipoly=True,
+                    proj=proj, voronoi=voronoi, duration=duration,
+                    start_date=start_date, end_date=end_date,
+                    obs_date_field=obs_date_field)
+            row_dict = dict((k.lower(), v) for k, v in r['properties'].iteritems())
+            # GeoJSON intermediate representation
+            geom_json = json.loads(str(r['geometry']).replace('\'', '"')\
+                                   .replace('(', '[').replace(')', ']'))
+            # If the projection is not long/lat (WGS84 - EPGS:4326), transform.
+            if proj != 4326:
+                geom_json['coordinates'] = transform_proj(geom_json['coordinates'], proj, 4326)
+            # Shapely intermediate representation, used to obtained the WKT
+            geom = shape(geom_json)
+            if force_multipoly and r['geometry']['type'] != 'MultiPolygon':
+                geom = MultiPolygon([geom])
+            row_dict['geom'] = 'SRID=4326;{0}'.format(geom.wkt)
+            if shp.schema['geometry'].lower() != 'point':
+                row_dict['centroid'] =\
+                    'SRID=4326;{0}'.format(geom.centroid.wkt)
+            if duration == 'interval':
+                if start_date:
+                    row_dict['start_date'] = start_date
+                elif np.random.rand() < 0.33:
+                    row_dict['start_date'] = datetime(2004, 03, 04)
+                if end_date:
+                    row_dict['end_date'] = end_date
+                elif np.random.rand() < 0.33:
+                    row_dict['end_date'] = datetime(2009, 07, 06)
+            else:
+                row_dict['obs_date'] = row_dict[obs_date_field.lower()]
+                del row_dict[obs_date_field]
             if shp.schema['geometry'].lower() == 'point' and voronoi:
                 row_dict['voronoi'] =\
                     'SRID=4326;{0}'.format(vor_polygons_dict[count])
@@ -219,7 +348,8 @@ def create_meta_table():
 
 def add_dataset_meta(name, file_name='', human_name='', description='',
     val_attr='', count_q=False, area_q=False, dist_q=False,
-    temp_q=False, weighted_q=False, voronoi=False):
+    temp_q=False, weighted_q=False, voronoi=False, duration='interval',
+    demo=False):
     """ Add infotmation about a dataset in the meta table """
     if human_name == '':
         human_name = name
@@ -229,7 +359,8 @@ def add_dataset_meta(name, file_name='', human_name='', description='',
         'human_name': human_name,'description': description,
         'last_update': func.current_timestamp(), 'val_attr': val_attr,
         'count_q': count_q, 'area_q': area_q, 'dist_q': dist_q,
-        'temp_q': temp_q, 'weighted_q': weighted_q, 'voronoi': voronoi}
+        'temp_q': temp_q, 'weighted_q': weighted_q, 'voronoi': voronoi,
+        'duration': duration, 'demo': demo}
     ins = meta_table.insert(row)
     conn = engine.contextual_connect()
     conn.execute(ins)

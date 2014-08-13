@@ -4,12 +4,16 @@ from functools import update_wrapper
 import os
 import math
 from datetime import date, datetime, timedelta
+from datetime_truncate import truncate
+import calendar
 import time
 import json
-from sqlalchemy import func, distinct, Column, Float, Table
+from sqlalchemy import func, case, distinct, Column, Float, Table
 from sqlalchemy.exc import NoSuchTableError
 from sqlalchemy.types import NullType
-from sqlalchemy.sql.expression import cast
+from sqlalchemy.sql.expression import cast,\
+        Executable, ClauseElement,_literal_as_text
+from sqlalchemy.ext.compiler import compiles
 from geoalchemy2 import Geometry
 from geoalchemy2.functions import ST_AsGeoJSON
 from operator import itemgetter
@@ -23,6 +27,8 @@ from collections import OrderedDict
 from wopr.models import MasterTable, MetaTable
 from wopr.database import session, app_engine as engine, Base
 
+import time
+
 api = Blueprint('api', __name__)
 
 dthandler = lambda obj: obj.isoformat() if isinstance(obj, date) else None
@@ -33,6 +39,18 @@ query_types = {
     'weighted': {'func': lambda **kwargs: weighted(**kwargs) },
     'dist':     {'func': lambda **kwargs: dist(**kwargs)     }
 }
+
+def increment_datetime(sourcedate, time_agg):
+    if time_agg == 'day':
+        days_to_add = 1
+    if time_agg == 'week':
+        days_to_add = 7
+    elif time_agg == 'month':
+        _, days_to_add = calendar.monthrange(sourcedate.year, sourcedate.month)
+    elif time_agg == 'year':
+        days_to_add = 366 if calendar.isleap(sourcedate.year) else 365
+    return sourcedate + timedelta(days=days_to_add)
+
 
 def crossdomain(origin=None, methods=None, headers=None,
                 max_age=21600, attach_to_all=True,
@@ -233,10 +251,20 @@ def contour_intersect(query_geom=None, contour_table_name='sf_shore',
     # with the shore contours; otherwise, just use the land
     # contours
     if query_geom:
-        hot_geom = func.ST_Intersection(
-            func.ST_GeomFromGeoJSON(query_geom),
-            func.ST_buffer(land_table.c['geom'], buffer_radius)
+        hot_geom = case([(
+                func.ST_Within(func.ST_GeomFromGeoJSON(query_geom),
+                        land_table.c['geom']),
+                func.ST_GeomFromGeoJSON(query_geom)
+            )],
+            else_=\
+                func.ST_Intersection(func.ST_GeomFromGeoJSON(query_geom),
+                                     land_table.c['geom'])
         )
+        #hot_geom = func.ST_Intersection(
+        #    func.ST_GeomFromGeoJSON(query_geom),
+        #    #func.ST_buffer(land_table.c['geom'], buffer_radius)
+        #    land_table.c['geom']
+        #)
     else:
         hot_geom = land_table.c['geom']
     land_val = session.query(func.ST_AsGeoJSON(hot_geom)).first()[0]
@@ -259,9 +287,19 @@ def area(land_only=True):
     if 'dataset_name' in raw_query_params.keys():
         dataset_name = raw_query_params['dataset_name']
         del raw_query_params['dataset_name']
-    del raw_query_params['obs_date__ge']
-    del raw_query_params['obs_date__le']
-    del raw_query_params['agg']
+    if 'obs_date__ge' in raw_query_params.keys():
+        raw_query_params['end_date__ge'] = raw_query_params['obs_date__ge']
+        del raw_query_params['obs_date__ge']
+        from_date = datetime.strptime(raw_query_params['end_date__ge'], '%Y/%m/%d')
+    if 'obs_date__le' in raw_query_params.keys():
+        raw_query_params['start_date__le'] = raw_query_params['obs_date__le']
+        del raw_query_params['obs_date__le']
+        to_date = datetime.strptime(raw_query_params['start_date__le'], '%Y/%m/%d')
+    if 'agg' in raw_query_params.keys():
+        agg = raw_query_params['agg']
+        del raw_query_params['agg']
+    else:
+        agg = 'day'
     if 'location_geom__within' in raw_query_params.keys():
         raw_query_params['geom__intersects'] = raw_query_params['location_geom__within']
         del raw_query_params['location_geom__within']
@@ -320,13 +358,30 @@ def area(land_only=True):
                 # query_geom is used instead of land_geom to compute
                 # intersections since the geometries in the queried dataset are
                 # all on land, and query geom is usually a simpler geometry
-                # than land_geom
-                hot_geom = func.ST_Intersection(func.ST_GeomFromGeoJSON(query_geom),
-                                                table.c['geom'])
+                # than land_geom.
+                # In order to avoid cumputing unneccesary intersection, we
+                # check if a feature is entirely included in the query
+                # geometry using the SQL case statement.
+                hot_geom = case([(
+                        func.ST_Within(table.c['geom'],
+                                       func.ST_GeomFromGeoJSON(query_geom)),
+                        table.c['geom']
+                    )],
+                    else_=\
+                        func.ST_Intersection(func.ST_GeomFromGeoJSON(query_geom),
+                                             table.c['geom'])
+                )
             else:
                 hot_geom = table.c['geom']
+            #base_query = session.query(
+            #    func.sum(func.ST_Area(hot_geom)) /\
+            #        func.ST_Area(func.ST_GeomFromGeoJSON(land_geom))
+            #)
+            table_start_date = func.date_trunc(agg, table.c['start_date'])
+            table_end_date = func.date_trunc(agg, table.c['end_date'])
             base_query = session.query(
-                func.sum(func.ST_Area(hot_geom)) /\
+                table_start_date, table_end_date,
+                func.ST_Area(hot_geom) /\
                     func.ST_Area(func.ST_GeomFromGeoJSON(land_geom))
             )
             # Applying this filtering makes the query compute the actual
@@ -334,14 +389,42 @@ def area(land_only=True):
             for clause in query_clauses:
                 base_query = base_query.filter(clause)
             values = [v for v in base_query.all()]
+            log = {}
+            if not from_date:
+                from_date = datetime(2000, 1, 1)
+            if not to_date:
+                to_date = datetime.now()
+            # Create start and end log entries
+            log[str(from_date.date())] = 0.0
+            log[str(to_date.date())] = 0.0
             for v in values:
-                d = {
-                    'dataset_name': table_name, 
-                    'human_name': human_name,
-                    'query_type': 'area',
-                    'value': round(v[0] if v[0] else 0.0, 4)
-                }
-                resp['objects'].append(d)
+                start = v[0] if v[0] > from_date else from_date
+                end = v[1]
+                log[str(start.date())] =\
+                    log.get(str(start.date()), 0.0) + v[2]
+                if end <= to_date:
+                    log[str(end.date())] =\
+                        log.get(str(end.date()), 0.0) - v[2]
+            log = OrderedDict(sorted(log.items()))
+            cum_value = 0.0
+            for k in log:
+                cum_value = cum_value + log[k]
+                log[k] = cum_value
+            d = {
+                'dataset_name': table_name, 
+                'human_name': human_name,
+                'query_type': 'area',
+                'response_type': 'time-series',
+                'time_agg': agg
+            }
+            return_values = []
+            for k in log:
+                return_values.append({
+                    'date': datetime.strptime(k, '%Y-%m-%d'),
+                    'value': round(log[k], 4)
+                })
+            d['values'] = return_values
+            resp['objects'].append(d)
         else:
             resp['meta']['status'] = 'error'
             resp['meta']['message'] = 'Invalid query.'
@@ -358,15 +441,28 @@ def count():
     if 'location_geom__within' in raw_query_params.keys():
         raw_query_params['geom__within'] = raw_query_params['location_geom__within']
         del raw_query_params['location_geom__within']
-    del raw_query_params['obs_date__ge']
-    del raw_query_params['obs_date__le']
-    del raw_query_params['agg']
+    if 'agg' in raw_query_params.keys():
+        agg = raw_query_params['agg']
+        del raw_query_params['agg']
+    else:
+        agg = 'day'
+    if 'obs_date__ge' in raw_query_params.keys():
+        from_date = datetime.strptime(raw_query_params['obs_date__ge'], '%Y/%m/%d')
+    else:
+        from_date = datetime(2000, 01, 01)
+    from_date = truncate(from_date, agg)
+    if 'obs_date__le' in raw_query_params.keys():
+        to_date = datetime.strptime(raw_query_params['obs_date__le'], '%Y/%m/%d')
+    else:
+        to_date = datetime.now()
+    to_date = truncate(to_date, agg)
     # Pull data from meta_table
     meta_table = Table('sf_meta', Base.metadata, autoload=True,
         autoload_with=engine)
     meta_query = session.query(
         meta_table.c['table_name'],
-        meta_table.c['human_name']
+        meta_table.c['human_name'],
+        meta_table.c['duration']
     ).filter('count_q')
     if dataset_name:
         meta_query = meta_query.filter(meta_table.c['table_name'] == dataset_name)
@@ -382,31 +478,107 @@ def count():
     for dataset in datasets:
         table_name = dataset[0]
         human_name = dataset[1]
+        duration = dataset[2]
         table = Table(table_name, Base.metadata,
             autoload=True, autoload_with=engine)
+        local_params = raw_query_params.copy()
+        if 'obs_date__ge' in local_params.keys() and duration == 'interval':
+            local_params['end_date__ge'] = local_params['obs_date__ge']
+            del local_params['obs_date__ge']
+        if 'obs_date__le' in local_params.keys() and duration == 'interval':
+            local_params['start_date__le'] = local_params['obs_date__le']
+            del local_params['obs_date__le']
         valid_query, query_clauses, resp, status_code =\
-            make_query(table, raw_query_params, resp)
+            make_query(table, local_params, resp)
         if valid_query:
-            base_query = session.query(
-                func.count(table.c['row_id'])
-            )
-            for clause in query_clauses:
-                base_query = base_query.filter(clause)
-            values = [v for v in base_query.all()]
-            for v in values:
-                d = {
-                    'dataset_name': table_name,
-                    'human_name': human_name,
-                    'query_type': 'count',
-                    'value': v[0]
-                }
-                resp['objects'].append(d)
+            if duration == 'interval':
+                table_start_date = func.date_trunc(agg, table.c['start_date'])
+                table_end_date = func.date_trunc(agg, table.c['end_date'])
+                base_query = session.query(
+                    table_start_date, table_end_date
+                )
+                for clause in query_clauses:
+                    base_query = base_query.filter(clause)
+                values = [v for v in base_query.all()]
+                log = {}
+                # Create start and end log entries
+                log[from_date] = 0
+                log[to_date] = 0
+                for v in values:
+                    start = v[0] if v[0] > from_date else from_date
+                    end = v[1]
+                    log[start] =\
+                        log.get(start, 0) + 1
+                    if end <= to_date:
+                        log[end] =\
+                            log.get(end, 0) - 1
+                log = OrderedDict(sorted(log.items()))
+                cum_value = 0
+                for k in log:
+                    cum_value = cum_value + log[k]
+                    log[k] = cum_value
+            else:
+                table_date = func.date_trunc(agg, table.c['obs_date'])
+                base_query = session.query(
+                    table_date,
+                    func.count(table.c['row_id'])
+                ).group_by(table_date).order_by(table_date)
+                for clause in query_clauses:
+                    base_query = base_query.filter(clause)
+                for clause in query_clauses:
+                    base_query = base_query.filter(clause)
+                values = [v for v in base_query.all()]
+                # Need to fill in the missing values with zeros                
+                filled_values = []
+                cursor = from_date
+                v_index = 0
+                if len(values) > 0:
+                    while v_index < len(values) and\
+                            cursor > values[v_index][0].replace(tzinfo=None):
+                        v_index += 1
+                while cursor <= to_date:
+                    if v_index < len(values) and\
+                        values[v_index][0].replace(tzinfo=None) == cursor:
+                        filled_values.append(values[v_index])
+                        v_index += 1
+                    else:
+                        filled_values.append((cursor, 0))
+                    cursor = increment_datetime(cursor, agg)
+                log = OrderedDict(filled_values)
+            d = {
+                'dataset_name': table_name,
+                'human_name': human_name,
+                'query_type': 'count',
+                'response_type': 'time-series',
+                'time_agg': agg
+            }
+            return_values = []
+            for k in log:
+                return_values.append({
+                    'date': k,
+                    'value': log[k]
+                })
+            d['values'] = return_values
+            resp['objects'].append(d)
         else:
             resp['meta']['status'] = 'error'
             resp['meta']['message'] = 'Invalid query.'
             resp['objects'] = []
             break
     return resp, status_code
+
+class explain(Executable, ClauseElement):
+    def __init__(self, stmt, analyze=False):
+        self.statement = _literal_as_text(stmt)
+        self.analyze = analyze
+
+@compiles(explain, 'postgresql')
+def pg_explain(element, compiler, **kw):
+    text = "EXPLAIN "
+    if element.analyze:
+        text += "ANALYZE "
+    text += compiler.process(element.statement)
+    return text
 
 def dist():
     """
@@ -415,27 +587,40 @@ def dist():
     interest in the dataset.
     """
     raw_query_params = request.args.copy()
+    blocks_raw_query_params = {}
     dataset_name = None
     query_geom = None
     if 'dataset_name' in raw_query_params.keys():
         dataset_name = raw_query_params['dataset_name']
         del raw_query_params['dataset_name']
     if 'location_geom__within' in raw_query_params.keys():
-        raw_query_params['centroid__within'] = raw_query_params['location_geom__within']
+        blocks_raw_query_params['centroid__within'] = raw_query_params['location_geom__within']
         del raw_query_params['location_geom__within']
-        val = json.loads(raw_query_params['centroid__within'])['geometry']
+        val = json.loads(blocks_raw_query_params['centroid__within'])['geometry']
         val['crs'] = {"type":"name", "properties":{"name":"EPSG:4326"}}
         query_geom = json.dumps(val)
-    del raw_query_params['obs_date__ge']
-    del raw_query_params['obs_date__le']
-    del raw_query_params['agg']
+    if 'agg' in raw_query_params.keys():
+        agg = raw_query_params['agg']
+        del raw_query_params['agg']
+    else:
+        agg = 'day'
+    if 'obs_date__ge' in raw_query_params.keys():
+        from_date = datetime.strptime(raw_query_params['obs_date__ge'], '%Y/%m/%d')
+    else:
+        from_date = datetime(2000, 01, 01)
+    from_date = truncate(from_date, agg)
+    if 'obs_date__le' in raw_query_params.keys():
+        to_date = datetime.strptime(raw_query_params['obs_date__le'], '%Y/%m/%d')
+    else:
+        to_date = datetime.now()
+    to_date = truncate(to_date, agg)
     # Pull data from meta_table
     meta_table = Table('sf_meta', Base.metadata, autoload=True,
         autoload_with=engine)
     meta_query = session.query(
         meta_table.c['table_name'],
         meta_table.c['human_name'],
-        meta_table.c['voronoi']
+        meta_table.c['duration'],
     ).filter('dist_q')
     if dataset_name:
         meta_query = meta_query.filter(meta_table.c['table_name'] == dataset_name)
@@ -443,9 +628,10 @@ def dist():
     # Retrieve the census tracts inside the considered area (whose
     # centroids are inside the considered area)
     # A buffer is added to consider centroids that may be in the water
-    land_geom = contour_intersect(query_geom, buffer_radius=0.0001)
-    raw_query_params['centroid__within'] = land_geom
-    census_table = Table('sf_census_blocks', Base.metadata,
+    land_geom = contour_intersect(query_geom, buffer_radius=0.0)
+    #land_geom = query_geom
+    blocks_raw_query_params['centroid__within'] = land_geom
+    blocks_table = Table('sf_census_blocks', Base.metadata,
         autoload=True, autoload_with=engine)
     resp = {
         'meta': {
@@ -458,53 +644,109 @@ def dist():
     for dataset in datasets:
         table_name = dataset[0]
         human_name = dataset[1]
-        voronoi = dataset[2]
+        duration = dataset[2]
         table = Table(table_name, Base.metadata,
             autoload=True, autoload_with=engine)
+        local_params = raw_query_params.copy()
+        if 'obs_date__ge' in local_params.keys() and duration == 'interval':
+            local_params['end_date__ge'] = local_params['obs_date__ge']
+            del local_params['obs_date__ge']
+        if 'obs_date__le' in local_params.keys() and duration == 'interval':
+            local_params['start_date__le'] = local_params['obs_date__le']
+            del local_params['obs_date__le']
         valid_query, query_clauses, resp, status_code =\
-            make_query(census_table, raw_query_params, resp)
+            make_query(table, local_params, resp)
+        valid_query, blocks_query_clauses, resp, status_code =\
+            make_query(blocks_table, blocks_raw_query_params, resp)
         if valid_query:
-            # If a Voronoi diagram has be pre-computed for the dataset, use it
-            # to compute the minimum distances of every block more efficiently.
-            # Note, the results obtained from the Voronoi diagram might be
-            # slightly different than the ones obtained from computing the min
-            # distances online, since the computation of the Voronoi diagram
-            # doesn't take into account the projection and treats long/lat as
-            # if on a flat plane.
-            if voronoi: 
-                nested_query = session.query(
-                    func.ST_Distance_Sphere(census_table.c['centroid'],
-                                            table.c['geom']).label('min_dist'),
-                    census_table.c['pop10'].label('pop')
-                ).select_from(census_table)\
-                    .join(table, func.ST_Within(census_table.c['centroid'],
-                        table.c['voronoi']))
+            if duration == 'interval':
+                # Retrieve the dates when "something changes"
+                start_dates_q = session.query(table.c['start_date']\
+                    .label('date'))\
+                    .filter(table.c['start_date'] >=
+                            local_params['end_date__ge'])\
+                    .filter(table.c['start_date'] <=
+                            local_params['start_date__le'])
+                end_dates_q = session.query(table.c['end_date']\
+                    .label('date'))\
+                    .filter(table.c['end_date'] >=
+                            local_params['end_date__ge'])\
+                    .filter(table.c['end_date'] <=
+                            local_params['start_date__le'])
+                dates_query = start_dates_q.union(end_dates_q)
+                dates = [from_date] + [v[0] for v in dates_query.all()]
+                dates = sorted(dates)
+                log = OrderedDict()
+                for date in dates:
+                    points_query = session.query(func.ST_Collect(table.c['geom'])\
+                        .label('points'))\
+                        .filter(table.c['start_date'] <= str(date))\
+                        .filter(table.c['end_date'] > str(date))
+                    points_query = points_query.subquery()
+                    nested_query = session.query(
+                        func.ST_Distance_Sphere(points_query.c['points'],
+                                    blocks_table.c['centroid']).label('min_dist'),
+                        blocks_table.c['pop10'].label('pop')
+                    )
+                    for clause in blocks_query_clauses:
+                        nested_query = nested_query.filter(clause)
+                    nested_query = nested_query.subquery()
+                    # Compute the weighted average (by block population)
+                    base_query = session.query(
+                        func.sum(nested_query.c['min_dist'] * nested_query.c['pop']) /\
+                            func.sum(nested_query.c['pop'])
+                    )
+                    value = base_query.first()[0] 
+                    log[date] = value 
+                # Replicate last value
+                log[to_date] = value 
             else:
-                nested_query = session.query(
-                    func.min(
-                        func.ST_Distance_Sphere(census_table.c['centroid'],
-                                                table.c['geom'])
-                    ).label('min_dist'),
-                    census_table.c['pop10'].label('pop')
-                ).group_by(census_table.c['row_id'])
-            for clause in query_clauses:
-                nested_query = nested_query.filter(clause)
-            nested_query = nested_query.subquery()
-            # Compute the weighted average (by block population)
-            print nested_query.columns
-            base_query = session.query(
-                func.sum(nested_query.c['min_dist'] * nested_query.c['pop']) /\
-                    func.sum(nested_query.c['pop'])
-            )
-            values = [v for v in base_query.all()]
-            for v in values:
-                d = {
-                    'dataset_name': table_name,
-                    'human_name': human_name,
-                    'query_type': 'dist',
-                    'value': round(v[0] if v[0] else 0.0, 4)
-                }
-                resp['objects'].append(d)
+                table_obs_date = func.date_trunc(agg, table.c['obs_date'])
+                log = OrderedDict()
+                cursor = from_date
+                while cursor <= to_date:
+                    points_query = session.query(func.ST_Collect(table.c['geom'])\
+                        .label('points'))\
+                        .filter(table_obs_date == cursor)
+                    points_query = points_query.subquery()
+                    nested_query = session.query(
+                        func.ST_Distance_Sphere(points_query.c['points'],
+                                    blocks_table.c['centroid']).label('min_dist'),
+                        blocks_table.c['pop10'].label('pop')
+                    )
+                    for clause in blocks_query_clauses:
+                        nested_query = nested_query.filter(clause)
+                    nested_query = nested_query.subquery()
+                    # Compute the weighted average (by block population)
+                    base_query = session.query(
+                        func.sum(nested_query.c['min_dist'] * nested_query.c['pop']) /\
+                            func.sum(nested_query.c['pop'])
+                    )
+                    value = base_query.first()[0]
+                    log[cursor] = value if value else -1
+                    cursor = increment_datetime(cursor, agg)
+                #explain_query = session.execute(explain(base_query, analyze=True))
+                #explain_values = [v for v in explain_query.fetchall()]
+                
+                #print '\nDIST_QUERY ({0}):'.format(human_name)
+                #for v in explain_values:
+                #    print v[0]
+                #print '\n\n'
+            d = {
+                'dataset_name': table_name,
+                'human_name': human_name,
+                'query_type': 'dist',
+                'response_type': 'time-series',
+                'time_agg': agg
+            }
+            return_values = []
+            for k in log:
+                return_values.append({
+                    'date': k,
+                    'value': round(log[k], 4)
+                })
+            d['values'] = return_values
+            resp['objects'].append(d)
         else:
             resp['meta']['status'] = 'error'
             resp['meta']['message'] = 'Invalid query.'
@@ -599,6 +841,7 @@ def weighted():
                     'dataset_name': table_name, 
                     'human_name': human_name,
                     'query_type': 'weighted',
+                    'response_type': 'single-value',
                     'value': round(v[0] if v[0] else 0.0, 4)
                 }
                 resp['objects'].append(d)
@@ -641,10 +884,19 @@ def indicators():
         },
         'objects': [],
     }
+    timetot1 = time.time()
     for name, attr in query_types.items():
+        time1 = time.time()
         resp, status_code = attr['func']()
+        time2 = time.time()
+        print '{0}: {1}'.format(name, time2-time1)
+        time1 = time.time()
         for obj in resp['objects']:
             resp_all['objects'].append(obj)
+        time2 = time.time()
+        print '\tExtra: {0}'.format(time2-time1)
+    timetot2 = time.time()
+    print 'TOTAL: {0}'.format(timetot2-timetot1)
     resp_all['meta']['status'] = 'ok'
     resp_all = make_response(json.dumps(resp_all, default=dthandler), status_code)
     resp_all.headers['Content-Type'] = 'application/json'
