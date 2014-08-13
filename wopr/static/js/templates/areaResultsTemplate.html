@@ -23,7 +23,7 @@
                        (obj.values.length > 2 ||
                         obj.values[0] == obj.values[1])) {  %>
                     <a data-toggle="collapse" data-parent="#accordion"
-                    href=<%= "#collapse_" + obj.dataset_name %> >See plot</a>
+                    href=<%= "#collapse_" + obj.dataset_name + '_' + obj.query_type%> >See plot</a>
                 <% } %>
             </td>
             <td><small>(<%= obj.query_type %>)</small></td>
@@ -31,7 +31,7 @@
         <% if (obj.response_type == 'time-series') { %>
             <tr>
                 <td colspan="4" class="hidden-row">
-                    <div id=<%= 'collapse_' + obj.dataset_name %> class="accordion-body collapse">
+                    <div id=<%= 'collapse_' + obj.dataset_name + '_' + obj.query_type%> class="accordion-body collapse">
                         <div id=<%= 'chart_' + obj.dataset_name + '_' + obj.query_type %> class="chart"></div>
                     </div>
                 </td>

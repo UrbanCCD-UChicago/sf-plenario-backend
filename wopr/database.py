@@ -13,6 +13,7 @@ from psycopg2.extensions import adapt, register_adapter, AsIs
 #    os.environ['WOPR_CONN'] = open('/home/ubuntu/wopr_conn', 'r').readline()
 
 app_engine = create_engine(os.environ['WOPR_CONN'], convert_unicode=True)
+#        echo=True)
 task_engine = create_engine(
     os.environ['WOPR_CONN'], 
     convert_unicode=True,

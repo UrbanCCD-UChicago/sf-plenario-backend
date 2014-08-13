@@ -310,7 +310,7 @@ def import_shapefile_timed(fpath, name, force_multipoly=False, proj=4326,
                 if start_date:
                     row_dict['start_date'] = start_date
                 elif np.random.rand() < 0.33:
-                    row_dict['start_date'] = datetime(2002, 03, 04)
+                    row_dict['start_date'] = datetime(2004, 03, 04)
                 if end_date:
                     row_dict['end_date'] = end_date
                 elif np.random.rand() < 0.33:

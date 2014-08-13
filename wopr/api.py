@@ -621,7 +621,6 @@ def dist():
         meta_table.c['table_name'],
         meta_table.c['human_name'],
         meta_table.c['duration'],
-        meta_table.c['voronoi']
     ).filter('dist_q')
     if dataset_name:
         meta_query = meta_query.filter(meta_table.c['table_name'] == dataset_name)
@@ -646,7 +645,6 @@ def dist():
         table_name = dataset[0]
         human_name = dataset[1]
         duration = dataset[2]
-        voronoi = dataset[3]
         table = Table(table_name, Base.metadata,
             autoload=True, autoload_with=engine)
         local_params = raw_query_params.copy()
@@ -661,65 +659,94 @@ def dist():
         valid_query, blocks_query_clauses, resp, status_code =\
             make_query(blocks_table, blocks_raw_query_params, resp)
         if valid_query:
-            # If a Voronoi diagram has be pre-computed for the dataset, use it
-            # to compute the minimum distances of every block more efficiently.
-            # Note, the results obtained from the Voronoi diagram might be
-            # slightly different than the ones obtained from computing the min
-            # distances online, since the computation of the Voronoi diagram
-            # doesn't take into account the projection and treats long/lat as
-            # if on a flat plane.
-            if voronoi and False: 
-                nested_query = session.query(
-                    func.ST_Distance_Sphere(blocks_table.c['centroid'],
-                                            table.c['geom']).label('min_dist'),
-                    blocks_table.c['pop10'].label('pop')
-                ).select_from(blocks_table)\
-                    .join(table, func.ST_Within(blocks_table.c['centroid'],
-                        table.c['voronoi']))
+            if duration == 'interval':
+                # Retrieve the dates when "something changes"
+                start_dates_q = session.query(table.c['start_date']\
+                    .label('date'))\
+                    .filter(table.c['start_date'] >=
+                            local_params['end_date__ge'])\
+                    .filter(table.c['start_date'] <=
+                            local_params['start_date__le'])
+                end_dates_q = session.query(table.c['end_date']\
+                    .label('date'))\
+                    .filter(table.c['end_date'] >=
+                            local_params['end_date__ge'])\
+                    .filter(table.c['end_date'] <=
+                            local_params['start_date__le'])
+                dates_query = start_dates_q.union(end_dates_q)
+                dates = [from_date] + [v[0] for v in dates_query.all()]
+                dates = sorted(dates)
+                log = OrderedDict()
+                for date in dates:
+                    points_query = session.query(func.ST_Collect(table.c['geom'])\
+                        .label('points'))\
+                        .filter(table.c['start_date'] <= str(date))\
+                        .filter(table.c['end_date'] > str(date))
+                    points_query = points_query.subquery()
+                    nested_query = session.query(
+                        func.ST_Distance_Sphere(points_query.c['points'],
+                                    blocks_table.c['centroid']).label('min_dist'),
+                        blocks_table.c['pop10'].label('pop')
+                    )
+                    for clause in blocks_query_clauses:
+                        nested_query = nested_query.filter(clause)
+                    nested_query = nested_query.subquery()
+                    # Compute the weighted average (by block population)
+                    base_query = session.query(
+                        func.sum(nested_query.c['min_dist'] * nested_query.c['pop']) /\
+                            func.sum(nested_query.c['pop'])
+                    )
+                    value = base_query.first()[0] 
+                    log[date] = value 
+                # Replicate last value
+                log[to_date] = value 
             else:
-                points_query = session.query(func.ST_Collect(table.c['geom'])\
-                        .label('points')) 
-                for clause in query_clauses:
-                    points_query = points_query.filter(clause)
-                points_query = points_query.subquery()
-                test_query = session.query(
-                    func.ST_Distance_Sphere(points_query.c['points'],
-                                blocks_table.c['centroid']).label('min_dist'),
-                    blocks_table.c['pop10'].label('pop')
-                )
-                nested_query = session.query(
-                    func.min(
-                        func.ST_Distance_Sphere(blocks_table.c['centroid'],
-                                                table.c['geom'])
-                    ).label('min_dist'),
-                    blocks_table.c['pop10'].label('pop')
-                ).group_by(blocks_table.c['row_id'])
-                nested_query = test_query
-            for clause in blocks_query_clauses:
-                nested_query = nested_query.filter(clause)
-            nested_query = nested_query.subquery()
-            # Compute the weighted average (by block population)
-            base_query = session.query(
-                func.sum(nested_query.c['min_dist'] * nested_query.c['pop']) /\
-                    func.sum(nested_query.c['pop'])
-            )
-            explain_query = session.execute(explain(base_query, analyze=True))
-            explain_values = [v for v in explain_query.fetchall()]
-            
-            print '\nDIST_QUERY ({0}):'.format(human_name)
-            for v in explain_values:
-                print v[0]
-            print '\n\n'
-            values = [v for v in base_query.all()]
-            for v in values:
-                d = {
-                    'dataset_name': table_name,
-                    'human_name': human_name,
-                    'query_type': 'dist',
-                    'response_type': 'single-value',
-                    'value': round(v[0] if v[0] else 0.0, 4)
-                }
-                resp['objects'].append(d)
+                table_obs_date = func.date_trunc(agg, table.c['obs_date'])
+                log = OrderedDict()
+                cursor = from_date
+                while cursor <= to_date:
+                    points_query = session.query(func.ST_Collect(table.c['geom'])\
+                        .label('points'))\
+                        .filter(table_obs_date == cursor)
+                    points_query = points_query.subquery()
+                    nested_query = session.query(
+                        func.ST_Distance_Sphere(points_query.c['points'],
+                                    blocks_table.c['centroid']).label('min_dist'),
+                        blocks_table.c['pop10'].label('pop')
+                    )
+                    for clause in blocks_query_clauses:
+                        nested_query = nested_query.filter(clause)
+                    nested_query = nested_query.subquery()
+                    # Compute the weighted average (by block population)
+                    base_query = session.query(
+                        func.sum(nested_query.c['min_dist'] * nested_query.c['pop']) /\
+                            func.sum(nested_query.c['pop'])
+                    )
+                    value = base_query.first()[0]
+                    log[cursor] = value if value else -1
+                    cursor = increment_datetime(cursor, agg)
+                #explain_query = session.execute(explain(base_query, analyze=True))
+                #explain_values = [v for v in explain_query.fetchall()]
+                
+                #print '\nDIST_QUERY ({0}):'.format(human_name)
+                #for v in explain_values:
+                #    print v[0]
+                #print '\n\n'
+            d = {
+                'dataset_name': table_name,
+                'human_name': human_name,
+                'query_type': 'dist',
+                'response_type': 'time-series',
+                'time_agg': agg
+            }
+            return_values = []
+            for k in log:
+                return_values.append({
+                    'date': k,
+                    'value': round(log[k], 4)
+                })
+            d['values'] = return_values
+            resp['objects'].append(d)
         else:
             resp['meta']['status'] = 'error'
             resp['meta']['message'] = 'Invalid query.'
