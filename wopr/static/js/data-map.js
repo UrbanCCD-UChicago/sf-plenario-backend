@@ -232,7 +232,8 @@
                             source: '',
                             time_agg: obj.time_agg,
                             iteration: i,
-                            type: obj.query_type
+                            type: obj.query_type,
+                            duration: obj.duration
                         }
                         TableChartHelper.create(chart_data, chart_properties);
                     }

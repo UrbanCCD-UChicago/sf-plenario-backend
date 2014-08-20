@@ -54,7 +54,7 @@ TableChartHelper.create = function(data, properties) {
       },
       series: [{
           color: TableChartHelper.colors[properties.iteration],
-          step: true,
+          step: properties.duration == 'interval',
           name: properties.name,
           data: data
       }]

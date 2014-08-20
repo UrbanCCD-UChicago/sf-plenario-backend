@@ -415,6 +415,7 @@ def area(land_only=True):
                 'human_name': human_name,
                 'query_type': 'area',
                 'response_type': 'time-series',
+                'duration': 'interval', 
                 'time_agg': agg
             }
             return_values = []
@@ -550,6 +551,7 @@ def count():
                 'human_name': human_name,
                 'query_type': 'count',
                 'response_type': 'time-series',
+                'duration': duration, 
                 'time_agg': agg
             }
             return_values = []
@@ -737,6 +739,7 @@ def dist():
                 'human_name': human_name,
                 'query_type': 'dist',
                 'response_type': 'time-series',
+                'duration': duration, 
                 'time_agg': agg
             }
             return_values = []
@@ -781,7 +784,8 @@ def weighted():
     meta_query = session.query(
         meta_table.c['table_name'],
         meta_table.c['human_name'],
-        meta_table.c['val_attr']
+        meta_table.c['val_attr'],
+        meta_table.c['duration']
     ).filter('weighted_q')
     if dataset_name:
         meta_query = meta_query.filter(meta_table.c['table_name'] == dataset_name)
@@ -798,6 +802,7 @@ def weighted():
         table_name = dataset[0]
         human_name = dataset[1]
         val_attr = dataset[2]
+        duration = dataset[3]
         table = Table(table_name, Base.metadata,
             autoload=True, autoload_with=engine)
         valid_query, query_clauses, resp, status_code =\
@@ -842,7 +847,8 @@ def weighted():
                     'human_name': human_name,
                     'query_type': 'weighted',
                     'response_type': 'single-value',
-                    'value': round(v[0] if v[0] else 0.0, 4)
+                    'value': round(v[0] if v[0] else 0.0, 4),
+                    'duration': duration
                 }
                 resp['objects'].append(d)
         else:
