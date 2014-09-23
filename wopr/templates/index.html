@@ -19,6 +19,43 @@
           </ul>
       </p>
       <hr />
+
+      <h2>Data Organization</h2>
+      <p>
+      This platform supports different types of geo-spatial data. Data can be
+      importent from different formats, mainly comma-separated values (CSV) and
+      ESRI shapefiles. Regardless of the source format, the system categorizes
+      the data along the spatial and temporal dimensions as follows:
+      <ul>
+          <li> In <strong>space</strong>, a record (shape) can be a <i>point</i> or
+          a <i>polygon</i>. Moreover, a polygon can be associated to a
+          <i>value</i> representing a quantity of interest. We call this type
+          <i>poly-value</i>.</li>
+          <li>In <strong>time</strong>, a record can be an <i>event</i> (i.e.
+          associated to a single timestamp), or an <i>interval</i> (i.e. its
+          duration spans from a start time to and end time.)</li>
+      </ul>
+      </p>
+      
+      <p>
+      The following table reports example datasets for some of the distinctions
+      above.
+      
+      <table class="table table-bordered">
+          <tr>
+              <th></th><th>Point</th><th>Polygon</th><th>Poly-value</th>
+          </tr>
+          <tr>
+              <th>Event</th><td>Crime<td></td><td>Weather reading</td>
+          </tr>
+          <tr>
+              <th>Interval</th><td>Community center</td><td>Park</td><td>Employment
+              rate (by census tract)</td>
+          </tr>
+          
+      </table>
+      </p>
+
       <h2>API documentation</h2>
       <p>
           <strong>Endpoints:</strong>

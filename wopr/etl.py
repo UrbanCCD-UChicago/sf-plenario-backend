@@ -28,7 +28,7 @@ sf_bbox = [37.83440864730549,
            37.648164160049525,
            -122.35198974609375]
 
-def sf_dat_crime(fpath=None, crime_type='violent'):
+def sf_crime(fpath=None, crime_type='violent'):
     #raw_crime = sf_raw_crime(fpath=fpath)
     # Assume for now there's no duplicate in the raw data, which means we don't
     # - dedupe_crime()
@@ -42,38 +42,34 @@ def sf_dat_crime(fpath=None, crime_type='violent'):
                       'ARSON', 'VANDALISM']
     # Create table "dat_sf_crimes_all", that contains additional fields needed
     # by Plenario, in addition to the raw data
-    dat_crime_table = sf_crime_table('dat_sf_crimes_{0}'.format(crime_type), Base.metadata)
-    dat_crime_table.append_column(
-        Column( 'sf_crimes_all_row_id', Integer,    primary_key=True                         ) )
-    dat_crime_table.append_column(
-        Column( 'start_date',           TIMESTAMP,  server_default=text('CURRENT_TIMESTAMP') ) )
-    dat_crime_table.append_column(
-        Column( 'end_date',             TIMESTAMP,  server_default=text('NULL')              ) )
-    dat_crime_table.append_column(
-        Column( 'current_flag',         Boolean,    server_default=text('TRUE')              ) )
+    crime_table = sf_crime_table('sf_{0}_crimes'.format(crime_type), Base.metadata)
+    # Add geom column
+    crime_table.append_column(Column('geom', Geometry('POINT', srid=4326)))
+    # Add obs_date column
+    crime_table.append_column(Column('obs_date', DateTime))
+    # Add row_id column
+    crime_table.append_column(Column('row_id', Integer, primary_key=True))
     # Constrain (id, start_date) to be unique (?)
     # dat_crime_table.append_constraint(UniqueConstraint('id', 'start_date'))
-    dat_crime_table.create(bind=engine, checkfirst=True)
-    new_cols = ['start_date', 'end_date', 'current_flag', 'sf_crimes_all_row_id']
+    crime_table.drop(bind=engine, checkfirst=True)
+    crime_table.create(bind=engine)
+    new_cols = ['row_id']
     # Insert data from raw_crime_table (to be src_crime_table when we'll check
     # for duplicates)
-    dat_ins = dat_crime_table.insert()\
+    dat_ins = crime_table.insert()\
         .from_select(
-            [c for c in dat_crime_table.columns.keys() if c not in new_cols],
-            select([c for c in raw_crime_table.columns if c.name != 'dup_row_id'])\
-                .where(raw_crime_table.c.category.in_(categories))
+            [c for c in crime_table.columns.keys() if c not in new_cols],
+            select([c for c in raw_crime_table.columns if c.name !=
+                'dup_row_id'] + [
+                    func.ST_SetSRID(
+                        func.ST_MakePoint(raw_crime_table.c['longitude'],
+                            raw_crime_table.c['latitude']), 4326) ] + \
+                    [ raw_crime_table.c['date'].label('obs_date') ])\
+                .where(raw_crime_table.c['category'].in_(categories))
         )
     conn = engine.contextual_connect()
     res = conn.execute(dat_ins)
-    cols = sf_crime_master_cols(dat_crime_table, crime_type=crime_type)
-    master_ins = MasterTable.insert()\
-        .from_select(
-            [c for c in MasterTable.columns.keys() if c != 'master_row_id'],
-            select(cols).select_from(dat_crime_table)
-        )
-    conn = engine.contextual_connect()
-    res = conn.execute(master_ins)
-    return 'DAT crime created'
+    return 'Table sf_{0}_crime created'.format(crime_type)
 
 def sf_raw_crime(fpath=None, tablename='raw_sf_crimes_all'):
     if not fpath:

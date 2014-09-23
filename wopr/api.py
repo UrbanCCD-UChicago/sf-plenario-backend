@@ -468,6 +468,7 @@ def count():
     if dataset_name:
         meta_query = meta_query.filter(meta_table.c['table_name'] == dataset_name)
     datasets = meta_query.all()
+    print datasets
     resp = {
         'meta': {
             'status': 'ok',
@@ -698,8 +699,8 @@ def dist():
                         func.sum(nested_query.c['min_dist'] * nested_query.c['pop']) /\
                             func.sum(nested_query.c['pop'])
                     )
-                    value = base_query.first()[0] 
-                    log[date] = value 
+                    value = base_query.first()[0]
+                    log[date] = value if value else -1 
                 # Replicate last value
                 log[to_date] = value 
             else:

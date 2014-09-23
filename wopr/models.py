@@ -1,6 +1,6 @@
 import os
-from sqlalchemy import Column, Integer, String, Boolean, Table, Date, DateTime, Float,\
-    Numeric
+from sqlalchemy import Column, Integer, String, Boolean, Table, Date,\
+    DateTime, Time, Float, Numeric
 from sqlalchemy.dialects.postgresql import TIMESTAMP, DOUBLE_PRECISION, TIME,\
     DATE
 from geoalchemy2 import Geometry
@@ -50,8 +50,8 @@ def sf_crime_table(name, metadata):
             Column( 'category',     String(length=50)               ),
             Column( 'description',  String(length=100)              ),
             Column( 'day_of_week',  String(length=10)               ),
-            Column( 'date',         DATE                            ),
-            Column( 'time',         TIME                            ),
+            Column( 'date',         Date                            ),
+            Column( 'time',         Time                            ),
             Column( 'pd_district',  String(length=20)               ),
             Column( 'resolution',   String(length=50)               ),
             Column( 'location_str', String(length=100)              ),

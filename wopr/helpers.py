@@ -14,10 +14,9 @@ import fiona
 from shapely.geometry import shape, Polygon, MultiPolygon
 import json
 import pyproj
+import urllib2
 
-CRIMES = 'https://data.cityofchicago.org/api/views/ijzp-q8t2/rows.csv?accessType=DOWNLOAD'
-#AWS_KEY = os.environ['AWS_ACCESS_KEY']
-#AWS_SECRET = os.environ['AWS_SECRET_KEY']
+CRIMES = 'http://apps.sfgov.org/datafiles/view.php?file=Police/sfpd_incident_all_csv.zip'
 DATA_DIR = os.environ['WOPR_DATA_DIR']
 
 def cleanup_temp_tables():
@@ -32,13 +31,12 @@ def cleanup_temp_tables():
     return 'Temp tables dropped'
 
 def download_crime():
-    r = requests.get(CRIMES, stream=True)
-    fpath = '%s/crime_%s.csv.gz' % (DATA_DIR, datetime.now().strftime('%Y-%m-%dT%H:%M:%S'))
-    with gzip.open(os.path.join(fpath), 'wb') as f:
-        for chunk in r.iter_content(chunk_size=1024):
-            if chunk:
-                f.write(chunk)
-                f.flush()
+    request = urllib2.urlopen(CRIMES)
+    fpath = '{0}/sf_crime_{1}.zip'\
+                .format(DATA_DIR, datetime.now().strftime('%Y-%m-%dT%H:%M:%S'))
+    output = open(fpath, 'w')
+    output.write(request.read())
+    output.close()
     return fpath
 
 def dat_crime():

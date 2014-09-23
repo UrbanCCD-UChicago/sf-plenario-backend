@@ -52,3 +52,5 @@ if __name__ == "__main__":
         weighted_q=True, val_attr='employ_pct')
     add_dataset_meta('sf_violent_crimes', human_name='Violent crimes',
         count_q=True, duration='event')
+    add_dataset_meta('sf_property_crimes', human_name='Property crimes',
+        count_q=True, duration='event')
