@@ -226,9 +226,13 @@
                         $.each(obj.values, function(j, v){
                             chart_data.push([moment(v.date).unix()*1000, v.value]);
                         })
+                        if (obj.hasOwnProperty('val_attr'))
+                            var chart_name = obj.dataset_name + '_' + obj.val_attr;
+                        else
+                            var chart_name = obj.dataset_name;
                         // Create the chart object
                         var chart_properties = {
-                            name: obj.dataset_name,
+                            name: chart_name,
                             source: '',
                             time_agg: obj.time_agg,
                             iteration: i,

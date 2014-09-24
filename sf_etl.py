@@ -20,6 +20,8 @@ if __name__ == "__main__":
     #    'sf_community_centers', proj=proj_str, voronoi=True)
     #import_shapefile('./data/ED.2.a.EmploymentRate.zip',
     #    'sf_employment_rate', proj=proj_str)
+    #import_shapefile('./data/cali_savings.zip',
+    #    'cali_energy_savings', duration='event', obs_date_field='date')
     #import_shapefile_timed('./data/HEF.2.a.OpenSpace_total.zip', 'sf_open_space_nonstatic', proj=proj_str)
     #import_shapefile_timed('./data/CI.1.a.CommunityCenterAccess.zip',
     #        'sf_community_centers_nonstatic', proj=proj_str)
@@ -50,6 +52,12 @@ if __name__ == "__main__":
         count_q=True, dist_q=True, voronoi=True)
     add_dataset_meta('sf_employment_rate', human_name='Employment rate',
         weighted_q=True, val_attr='employ_pct')
+    add_dataset_meta('cali_energy_savings', human_name='2013 Energy savings [kWh]',
+        weighted_q=True, val_attr='kwh', duration='event')
+    add_dataset_meta('cali_energy_savings', human_name='2013 Energy savings [therms]',
+        weighted_q=True, val_attr='therms', duration='event')
+    add_dataset_meta('cali_energy_savings', human_name='2013 Energy savings [$]',
+        weighted_q=True, val_attr='dollars', duration='event')
     add_dataset_meta('sf_violent_crimes', human_name='Violent crimes',
         count_q=True, duration='event')
     add_dataset_meta('sf_property_crimes', human_name='Property crimes',

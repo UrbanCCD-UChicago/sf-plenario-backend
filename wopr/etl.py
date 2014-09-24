@@ -177,7 +177,10 @@ def import_shapefile(fpath, name, force_multipoly=False, proj=4326,
             # If and when the 1st multipoly is encountered, the table is
             # re-initialized.
             if not force_multipoly and r['geometry']['type'] == 'MultiPolygon':
-                return import_shapefile(fpath, name, force_multipoly=True, proj=proj)
+                return import_shapefile_timed(fpath, name, force_multipoly=True,
+                    proj=proj, voronoi=voronoi, duration=duration,
+                    start_date=start_date, end_date=end_date,
+                    obs_date_field=obs_date_field)
             row_dict = dict((k.lower(), v) for k, v in r['properties'].iteritems())
             # GeoJSON intermediate representation
             geom_json = json.loads(str(r['geometry']).replace('\'', '"')\
@@ -200,7 +203,7 @@ def import_shapefile(fpath, name, force_multipoly=False, proj=4326,
                     row_dict['end_date'] = end_date
             else:
                 row_dict['obs_date'] = row_dict[obs_date_field.lower()]
-                del row_dict[obs_date_field]
+                #del row_dict[obs_date_field]
             if shp.schema['geometry'].lower() == 'point' and voronoi:
                 row_dict['voronoi'] =\
                     'SRID=4326;{0}'.format(vor_polygons_dict[count])

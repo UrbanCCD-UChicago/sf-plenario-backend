@@ -768,9 +768,6 @@ def weighted():
     if 'dataset_name' in raw_query_params.keys():
         dataset_name = raw_query_params['dataset_name']
         del raw_query_params['dataset_name']
-    del raw_query_params['obs_date__ge']
-    del raw_query_params['obs_date__le']
-    del raw_query_params['agg']
     if 'location_geom__within' in raw_query_params.keys():
         raw_query_params['geom__intersects'] = raw_query_params['location_geom__within']
         del raw_query_params['location_geom__within']
@@ -779,6 +776,21 @@ def weighted():
         query_geom = json.dumps(val)
     else:
         query_geom = None
+    if 'agg' in raw_query_params.keys():
+        agg = raw_query_params['agg']
+        del raw_query_params['agg']
+    else:
+        agg = 'day'
+    if 'obs_date__ge' in raw_query_params.keys():
+        from_date = datetime.strptime(raw_query_params['obs_date__ge'], '%Y/%m/%d')
+    else:
+        from_date = datetime(2000, 01, 01)
+    from_date = truncate(from_date, agg)
+    if 'obs_date__le' in raw_query_params.keys():
+        to_date = datetime.strptime(raw_query_params['obs_date__le'], '%Y/%m/%d')
+    else:
+        to_date = datetime.now()
+    to_date = truncate(to_date, agg)
     # Pull data from meta_table
     meta_table = Table('sf_meta', Base.metadata, autoload=True,
         autoload_with=engine)
@@ -791,6 +803,7 @@ def weighted():
     if dataset_name:
         meta_query = meta_query.filter(meta_table.c['table_name'] == dataset_name)
     datasets = meta_query.all()
+    land_geom = contour_intersect(query_geom, buffer_radius=0.0)
     resp = {
         'meta': {
             'status': 'ok',
@@ -806,52 +819,98 @@ def weighted():
         duration = dataset[3]
         table = Table(table_name, Base.metadata,
             autoload=True, autoload_with=engine)
+        local_params = raw_query_params.copy()
+        if 'obs_date__ge' in local_params.keys() and duration == 'interval':
+            local_params['end_date__ge'] = local_params['obs_date__ge']
+            del local_params['obs_date__ge']
+        if 'obs_date__le' in local_params.keys() and duration == 'interval':
+            local_params['start_date__le'] = local_params['obs_date__le']
+            del local_params['obs_date__le']
         valid_query, query_clauses, resp, status_code =\
-            make_query(table, raw_query_params, resp)
+            make_query(table, local_params, resp)
         if valid_query:
-            # Retrieve the shore contours to consider land only
-            land_table = Table('sf_shore', Base.metadata,
-                autoload=True, autoload_with=engine)
-            # If a query geometry is provided, compute its intersection
-            # with the shore contours; otherwise, just use the land
-            # contours
-            if query_geom:
-                hot_geom = func.ST_Intersection(
-                    func.ST_GeomFromGeoJSON(query_geom),
-                    land_table.c['geom']
-                )
+            if duration == 'interval':
+                # Retrieve the dates when "something changes"
+                start_dates_q = session.query(table.c['start_date']\
+                    .label('date'))\
+                    .filter(table.c['start_date'] >=
+                            local_params['end_date__ge'])\
+                    .filter(table.c['start_date'] <=
+                            local_params['start_date__le'])
+                end_dates_q = session.query(table.c['end_date']\
+                    .label('date'))\
+                    .filter(table.c['end_date'] >=
+                            local_params['end_date__ge'])\
+                    .filter(table.c['end_date'] <=
+                            local_params['start_date__le'])
+                dates_query = start_dates_q.union(end_dates_q)
+                dates = [from_date] + [v[0] for v in dates_query.all()]
+                dates = sorted(dates)
+                log = OrderedDict()
+
+                for date in dates:             
+                    if query_geom:
+                        # compute the intersections
+                        hot_geom = func.ST_Intersection(func.ST_GeomFromGeoJSON(land_geom),
+                                                        table.c['geom'])
+                    else:
+                        # if no query_geom is provided, just consider everything
+                        hot_geom = table.c['geom']
+                    base_query = session.query(
+                        func.sum(func.ST_Area(hot_geom) * table.c[val_attr]) /\
+                            func.ST_Area(func.ST_GeomFromGeoJSON(land_geom))
+                    )\
+                    .filter(table.c['start_date'] <= str(date))\
+                    .filter(table.c['end_date'] > str(date))
+                    # Applying this filtering makes the query compute the actual
+                    # intersection only with polygons that actually intersects
+                    for clause in query_clauses:
+                        base_query = base_query.filter(clause)
+                    value = base_query.first()[0]
+                    log[date] = value if value else 0
+                log[to_date] = value
             else:
-                hot_geom = land_table.c['geom']
-            land_val = session.query(func.ST_AsGeoJSON(hot_geom)).first()[0]
-            land_val = json.loads(land_val)
-            land_val['crs'] = {"type":"name","properties":{"name":"EPSG:4326"}}
-            land_geom = json.dumps(land_val)
-            if query_geom:
-                # compute the intersections
-                hot_geom = func.ST_Intersection(func.ST_GeomFromGeoJSON(land_geom),
-                                                table.c['geom'])
-            else:
-                # if no query_geom is provided, just consider everything
-                hot_geom = table.c['geom']
-            base_query = session.query(
-                func.sum(func.ST_Area(hot_geom) * table.c[val_attr]) /\
-                    func.ST_Area(func.ST_GeomFromGeoJSON(land_geom))
-            )
-            # Applying this filtering makes the query compute the actual
-            # intersection only with polygons that actually intersects
-            for clause in query_clauses:
-                base_query = base_query.filter(clause)
-            values = [v for v in base_query.all()]
-            for v in values:
-                d = {
-                    'dataset_name': table_name, 
-                    'human_name': human_name,
-                    'query_type': 'weighted',
-                    'response_type': 'single-value',
-                    'value': round(v[0] if v[0] else 0.0, 4),
-                    'duration': duration
-                }
-                resp['objects'].append(d)
+                table_obs_date = func.date_trunc(agg, table.c['obs_date'])
+                log = OrderedDict()
+                cursor = from_date
+                while cursor <= to_date:
+                    if query_geom:
+                        # compute the intersections
+                        hot_geom = func.ST_Intersection(func.ST_GeomFromGeoJSON(land_geom),
+                                                        table.c['geom'])
+                    else:
+                        # if no query_geom is provided, just consider everything
+                        hot_geom = table.c['geom']
+                    base_query = session.query(
+                        func.sum(func.ST_Area(hot_geom) * table.c[val_attr]) /\
+                            func.ST_Area(func.ST_GeomFromGeoJSON(land_geom))
+                    )\
+                    .filter(table_obs_date == cursor)
+                    # Applying this filtering makes the query compute the actual
+                    # intersection only with polygons that actually intersects
+                    for clause in query_clauses:
+                        base_query = base_query.filter(clause)
+                    value = base_query.first()[0]
+                    log[cursor] = value if value else 0
+                    cursor = increment_datetime(cursor, agg)
+                    
+            d = {
+                'dataset_name': table_name,
+                'val_attr': val_attr,
+                'human_name': human_name,
+                'query_type': 'weighed',
+                'response_type': 'time-series',
+                'duration': duration, 
+                'time_agg': agg
+            }
+            return_values = []
+            for k in log:
+                return_values.append({
+                    'date': k,
+                    'value': round(log[k], 4)
+                })
+            d['values'] = return_values
+            resp['objects'].append(d)
         else:
             resp['meta']['status'] = 'error'
             resp['meta']['message'] = 'Invalid query.'
