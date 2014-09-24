@@ -177,7 +177,7 @@ def import_shapefile(fpath, name, force_multipoly=False, proj=4326,
             # If and when the 1st multipoly is encountered, the table is
             # re-initialized.
             if not force_multipoly and r['geometry']['type'] == 'MultiPolygon':
-                return import_shapefile_timed(fpath, name, force_multipoly=True,
+                return import_shapefile(fpath, name, force_multipoly=True,
                     proj=proj, voronoi=voronoi, duration=duration,
                     start_date=start_date, end_date=end_date,
                     obs_date_field=obs_date_field)

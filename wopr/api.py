@@ -468,7 +468,6 @@ def count():
     if dataset_name:
         meta_query = meta_query.filter(meta_table.c['table_name'] == dataset_name)
     datasets = meta_query.all()
-    print datasets
     resp = {
         'meta': {
             'status': 'ok',
@@ -848,7 +847,8 @@ def weighted():
                 dates = sorted(dates)
                 log = OrderedDict()
 
-                for date in dates:             
+                for date in dates:      
+                    print date
                     if query_geom:
                         # compute the intersections
                         hot_geom = func.ST_Intersection(func.ST_GeomFromGeoJSON(land_geom),
