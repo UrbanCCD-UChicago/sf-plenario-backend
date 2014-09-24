@@ -96,7 +96,7 @@ def map_esri_type(esri_type):
         else:
             ps = l.split('.')
             if len(ps) < 2:    return Float(precision=ps[0])
-            else:              return Numeric(int(ps[0]), int(ps[1]))
+            else:              return Numeric(int(ps[0])+3, int(ps[1]))
             
 def shp2table(name, metadata, schema, force_multipoly=False):
     """ Create a SQLAlchemy table schema from a shapefile schema opbtained through fiona
