@@ -8,13 +8,13 @@ from datetime_truncate import truncate
 import calendar
 import time
 import json
-from sqlalchemy import func, case, distinct, Column, Float, Table
+from sqlalchemy import func, case, cast, distinct, Column, Float, Table
 from sqlalchemy.exc import NoSuchTableError
 from sqlalchemy.types import NullType
 from sqlalchemy.sql.expression import cast,\
         Executable, ClauseElement,_literal_as_text
 from sqlalchemy.ext.compiler import compiles
-from geoalchemy2 import Geometry
+from geoalchemy2 import Geometry, Geography
 from geoalchemy2.functions import ST_AsGeoJSON
 from operator import itemgetter
 from itertools import groupby
@@ -37,7 +37,8 @@ query_types = {
     'area':     {'func': lambda **kwargs: area(**kwargs)     },
     'count':    {'func': lambda **kwargs: count(**kwargs)    },
     'weighted': {'func': lambda **kwargs: weighted(**kwargs) },
-    'dist':     {'func': lambda **kwargs: dist(**kwargs)     }
+    'dist':     {'func': lambda **kwargs: dist(**kwargs)     },
+    'access':   {'func': lambda **kwargs: access(**kwargs)     }
 }
 
 def increment_datetime(sourcedate, time_agg):
@@ -756,6 +757,184 @@ def dist():
             resp['objects'] = []
             break
     return resp, status_code
+
+def access():
+    """
+    This function answers to query of the type "how many people live within x
+    meters from a given (set of) point(s) of intereset?
+    Default is 400 m (~1/4 mile)
+    """
+    raw_query_params = request.args.copy()
+    blocks_raw_query_params = {}
+    dataset_name = None
+    query_geom = None
+    if 'dataset_name' in raw_query_params.keys():
+        dataset_name = raw_query_params['dataset_name']
+        del raw_query_params['dataset_name']
+    if 'location_geom__within' in raw_query_params.keys():
+        blocks_raw_query_params['centroid__within'] = raw_query_params['location_geom__within']
+        del raw_query_params['location_geom__within']
+        val = json.loads(blocks_raw_query_params['centroid__within'])['geometry']
+        val['crs'] = {"type":"name", "properties":{"name":"EPSG:4326"}}
+        query_geom = json.dumps(val)
+    if 'agg' in raw_query_params.keys():
+        agg = raw_query_params['agg']
+        del raw_query_params['agg']
+    else:
+        agg = 'day'
+    if 'obs_date__ge' in raw_query_params.keys():
+        from_date = datetime.strptime(raw_query_params['obs_date__ge'], '%Y/%m/%d')
+    else:
+        from_date = datetime(2000, 01, 01)
+    from_date = truncate(from_date, agg)
+    if 'obs_date__le' in raw_query_params.keys():
+        to_date = datetime.strptime(raw_query_params['obs_date__le'], '%Y/%m/%d')
+    else:
+        to_date = datetime.now()
+    to_date = truncate(to_date, agg)
+    # Pull data from meta_table
+    meta_table = Table('sf_meta', Base.metadata, autoload=True,
+        autoload_with=engine)
+    meta_query = session.query(
+        meta_table.c['table_name'],
+        meta_table.c['human_name'],
+        meta_table.c['duration'],
+    ).filter('access_q')
+    if dataset_name:
+        meta_query = meta_query.filter(meta_table.c['table_name'] == dataset_name)
+    datasets = meta_query.all()
+    # Retrieve the census tracts inside the considered area (whose
+    # centroids are inside the considered area)
+    # A buffer is added to consider centroids that may be in the water
+    land_geom = contour_intersect(query_geom, buffer_radius=0.0)
+    blocks_raw_query_params['centroid__within'] = land_geom
+    blocks_table = Table('sf_census_blocks', Base.metadata,
+        autoload=True, autoload_with=engine)
+    resp = {
+        'meta': {
+            'status': 'ok',
+            'message': '',
+        },
+        'objects': [],
+    }
+    status_code = 200
+    for dataset in datasets:
+        table_name = dataset[0]
+        human_name = dataset[1]
+        duration = dataset[2]
+        table = Table(table_name, Base.metadata,
+            autoload=True, autoload_with=engine)
+        local_params = raw_query_params.copy()
+        if 'obs_date__ge' in local_params.keys() and duration == 'interval':
+            local_params['end_date__ge'] = local_params['obs_date__ge']
+            del local_params['obs_date__ge']
+        if 'obs_date__le' in local_params.keys() and duration == 'interval':
+            local_params['start_date__le'] = local_params['obs_date__le']
+            del local_params['obs_date__le']
+        valid_query, query_clauses, resp, status_code =\
+            make_query(table, local_params, resp)
+        valid_query, blocks_query_clauses, resp, status_code =\
+            make_query(blocks_table, blocks_raw_query_params, resp)
+        if valid_query:
+            if duration == 'interval':
+                # Retrieve the dates when "something changes"
+                start_dates_q = session.query(table.c['start_date']\
+                    .label('date'))\
+                    .filter(table.c['start_date'] >=
+                            local_params['end_date__ge'])\
+                    .filter(table.c['start_date'] <=
+                            local_params['start_date__le'])
+                end_dates_q = session.query(table.c['end_date']\
+                    .label('date'))\
+                    .filter(table.c['end_date'] >=
+                            local_params['end_date__ge'])\
+                    .filter(table.c['end_date'] <=
+                            local_params['start_date__le'])
+                dates_query = start_dates_q.union(end_dates_q)
+                dates = [from_date] + [v[0] for v in dates_query.all()]
+                dates = sorted(dates)
+                log = OrderedDict()
+                for date in dates:
+                    points_query =\
+                        session.query(cast(func.ST_Collect(table.c['geom']), Geography)\
+                        .label('points'))\
+                        .filter(table.c['start_date'] <= str(date))\
+                        .filter(table.c['end_date'] > str(date))
+                    points_query = points_query.subquery()
+                    pop_query = session.query(
+                        blocks_table.c['centroid'].label('centroid'),
+                        blocks_table.c['pop10'].label('pop')
+                    )
+                    for clause in blocks_query_clauses:
+                        pop_query = pop_query.filter(clause)
+                    block_pop =\
+                        session.query(func.sum(pop_query.subquery().c['pop'])).first()[0]
+                    pop_query = pop_query.subquery()
+                    query_pop =\
+                        session.query(func.sum(pop_query.c['pop']))\
+                        .filter(func.ST_DWithin(cast(pop_query.c['centroid'], Geography),
+                            points_query.c['points'], 400)).first()[0]
+                    value = float(query_pop) / float(block_pop);
+                    log[date] = value if value else -1 
+                # Replicate last value
+                log[to_date] = value 
+            else:
+                table_obs_date = func.date_trunc(agg, table.c['obs_date'])
+                log = OrderedDict()
+                cursor = from_date
+                while cursor <= to_date:
+                    points_query =\
+                        session.query(cast(func.ST_Collect(table.c['geom']), Geography)\
+                        .label('points'))\
+                        .filter(table_obs_date == cursor)
+                    points_query = points_query.subquery()
+                    pop_query = session.query(
+                        blocks_table.c['centroid'].label('centroid'),
+                        blocks_table.c['pop10'].label('pop')
+                    )
+                    for clause in blocks_query_clauses:
+                        pop_query = pop_query.filter(clause)
+                    block_pop =\
+                        session.query(func.sum(pop_query.subquery().c['pop'])).first()[0]
+                    pop_query = pop_query.subquery()
+                    query_pop =\
+                        session.query(func.sum(pop_query.c['pop']))\
+                        .filter(func.ST_DWithin(cast(pop_query.c['centroid'], Geography),
+                            points_query.c['points'], 400)).first()[0]
+                    print query_pop
+                    value = float(query_pop) / float(block_pop);
+                    log[cursor] = value if value else -1
+                    cursor = increment_datetime(cursor, agg)
+                #explain_query = session.execute(explain(base_query, analyze=True))
+                #explain_values = [v for v in explain_query.fetchall()]
+                
+                #print '\nDIST_QUERY ({0}):'.format(human_name)
+                #for v in explain_values:
+                #    print v[0]
+                #print '\n\n'
+            d = {
+                'dataset_name': table_name,
+                'human_name': human_name,
+                'query_type': 'access',
+                'response_type': 'time-series',
+                'duration': duration, 
+                'time_agg': agg
+            }
+            return_values = []
+            for k in log:
+                return_values.append({
+                    'date': k,
+                    'value': round(log[k], 4)
+                })
+            d['values'] = return_values
+            resp['objects'].append(d)
+        else:
+            resp['meta']['status'] = 'error'
+            resp['meta']['message'] = 'Invalid query.'
+            resp['objects'] = []
+            break
+    return resp, status_code
+
 
 def weighted():
     """

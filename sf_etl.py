@@ -47,7 +47,7 @@ if __name__ == "__main__":
     add_dataset_meta('sf_block_parties', human_name='Block parties',
         count_q=True, dist_q=True, voronoi=True, duration='event')
     add_dataset_meta('sf_community_centers', human_name='Community centers',
-        count_q=True, dist_q=True, voronoi=True)
+        count_q=True, dist_q=True, access_q = True, voronoi=True)
     add_dataset_meta('sf_farmers_markets', human_name='Farmers markets',
         count_q=True, dist_q=True, voronoi=True)
     add_dataset_meta('sf_employment_rate', human_name='Employment rate',
@@ -59,6 +59,6 @@ if __name__ == "__main__":
     add_dataset_meta('cali_energy_savings', human_name='2013 Energy savings [$]',
         weighted_q=True, val_attr='dollars', duration='event')
     add_dataset_meta('sf_violent_crimes', human_name='Violent crimes',
-        count_q=True, duration='event')
+        count_q=True, access_q=True, duration='event')
     add_dataset_meta('sf_property_crimes', human_name='Property crimes',
         count_q=True, duration='event')
