@@ -874,7 +874,10 @@ def access():
                         session.query(func.sum(pop_query.c['pop']))\
                         .filter(func.ST_DWithin(cast(pop_query.c['centroid'], Geography),
                             points_query.c['points'], 400)).first()[0]
-                    value = float(query_pop) / float(block_pop);
+                    if query_pop and block_pop:
+                        value = float(query_pop) / float(block_pop);
+                    else:
+                        value = 0;
                     log[date] = value if value else -1 
                 # Replicate last value
                 log[to_date] = value 
@@ -901,8 +904,10 @@ def access():
                         session.query(func.sum(pop_query.c['pop']))\
                         .filter(func.ST_DWithin(cast(pop_query.c['centroid'], Geography),
                             points_query.c['points'], 400)).first()[0]
-                    print query_pop
-                    value = float(query_pop) / float(block_pop);
+                    if query_pop and block_pop:
+                        value = float(query_pop) / float(block_pop);
+                    else:
+                        value = 0;
                     log[cursor] = value if value else -1
                     cursor = increment_datetime(cursor, agg)
                 #explain_query = session.execute(explain(base_query, analyze=True))
